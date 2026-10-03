@@ -36,8 +36,13 @@ data class UserDto(val guid: String, val name: String) {
 }
 
 @Serializable
-data class PlaylistDto(val guid: String, val name: String, val coverId: String? = null) {
-    fun toDomain() = Playlist(CollectionGuid(guid), name, coverId)
+data class PlaylistDto(
+    val guid: String,
+    val name: String,
+    val coverId: String? = null,
+    val trackCount: Int? = null,
+) {
+    fun toDomain() = Playlist(CollectionGuid(guid), name, coverId, trackCount)
 }
 
 @Serializable

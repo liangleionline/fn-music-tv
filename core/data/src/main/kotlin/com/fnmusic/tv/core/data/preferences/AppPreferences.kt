@@ -29,9 +29,14 @@ class AppPreferences(context: Context, private val localStore: LocalStore) {
                 playerStyle = account.playerStyle?.let { runCatching { PlayerStyle.valueOf(it) }.getOrNull() } ?: PlayerStyle.Poster,
                 cacheBudget = account.cacheBudget?.let { runCatching { CacheBudget.valueOf(it) }.getOrNull() } ?: CacheBudget.Default,
                 onlineLyricsMatchingEnabled = account.onlineLyricsMatchingEnabled,
+                playlistOrder = readPlaylistOrder(value),
+                backgroundContinueOnExit = store.getBoolean(BACKGROUND_CONTINUE_ON_EXIT, false),
             )
             migratedNamespace == null -> read().also { store.edit().putString(MIGRATED_NAMESPACE, value).apply() }
-            else -> AppPreferencesState()
+            else -> AppPreferencesState(
+                playlistOrder = readPlaylistOrder(value),
+                backgroundContinueOnExit = store.getBoolean(BACKGROUND_CONTINUE_ON_EXIT, false),
+            )
         }
         _state.value = initial
         store.edit()
@@ -65,6 +70,27 @@ class AppPreferences(context: Context, private val localStore: LocalStore) {
         persist()
     }
 
+    /** 当前账号自定义的歌单排序；空列表表示沿用服务器默认顺序。 */
+    fun setPlaylistOrder(order: List<String>) {
+        val currentNamespace = namespace ?: return
+        val key = playlistOrderKey(currentNamespace)
+        store.edit().putString(key, order.joinToString(PROFILE_SEPARATOR)).apply()
+        _state.value = _state.value.copy(playlistOrder = order)
+        persist()
+    }
+
+    fun backgroundContinueOnExit(): Boolean = store.getBoolean(BACKGROUND_CONTINUE_ON_EXIT, false)
+
+    fun setBackgroundContinueOnExit(enabled: Boolean) {
+        store.edit().putBoolean(BACKGROUND_CONTINUE_ON_EXIT, enabled).apply()
+        _state.value = _state.value.copy(backgroundContinueOnExit = enabled)
+    }
+
+    private fun readPlaylistOrder(currentNamespace: String): List<String> {
+        val raw = store.getString(playlistOrderKey(currentNamespace), null) ?: return emptyList()
+        return raw.split(PROFILE_SEPARATOR).filter(String::isNotBlank)
+    }
+
     private fun persist() {
         val currentNamespace = namespace ?: return
         val current = _state.value
@@ -84,6 +110,8 @@ class AppPreferences(context: Context, private val localStore: LocalStore) {
         cacheBudget = store.getString(CACHE_BUDGET, null)?.let { runCatching { CacheBudget.valueOf(it) }.getOrNull() }
             ?: CacheBudget.Default,
         onlineLyricsMatchingEnabled = store.getBoolean(ONLINE_LYRICS_MATCHING, true),
+        playlistOrder = namespace?.let(::readPlaylistOrder).orEmpty(),
+        backgroundContinueOnExit = store.getBoolean(BACKGROUND_CONTINUE_ON_EXIT, false),
     )
 
     private companion object {
@@ -91,5 +119,10 @@ class AppPreferences(context: Context, private val localStore: LocalStore) {
         const val CACHE_BUDGET = "cache_budget"
         const val ONLINE_LYRICS_MATCHING = "online_lyrics_matching"
         const val MIGRATED_NAMESPACE = "room_migrated_namespace"
+        const val BACKGROUND_CONTINUE_ON_EXIT = "background_continue_on_exit"
+        const val PLAY_LIST_ORDER_PREFIX = "playlist_order_"
+        const val PROFILE_SEPARATOR = "\u0001"
+
+        private fun playlistOrderKey(namespace: String) = "$PLAY_LIST_ORDER_PREFIX$namespace"
     }
 }

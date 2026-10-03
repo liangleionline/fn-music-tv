@@ -833,6 +833,15 @@ private fun LoginCheckbox(
                 RoundedCornerShape(6.dp),
             )
             .focusable()
+            .onPreviewKeyEvent { event ->
+                // 遥控器确定键（DPAD_CENTER / Enter）也能切换复选框，修复原版遥控器无法点击的问题。
+                if (event.key == Key.Enter || event.key == Key.DirectionCenter) {
+                    if (event.type == KeyEventType.KeyUp) onClick()
+                    true
+                } else {
+                    false
+                }
+            }
             .toggleable(
                 value = selected,
                 role = Role.Checkbox,

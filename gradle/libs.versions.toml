@@ -24,6 +24,7 @@ androidxTestCore = "1.7.0"
 robolectric = "4.16.1"
 accompanistLyricsCore = "0.4.7"
 appUpdate = "4.3.6"
+pinyin = "2.5.1"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -66,6 +67,7 @@ robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectr
 accompanist-lyrics-core = { module = "com.mocharealm.accompanist:lyrics-core", version.ref = "accompanistLyricsCore" }
 appupdate = { module = "io.github.azhon:appupdate", version.ref = "appUpdate" }
 appupdate-noop = { module = "io.github.azhon:appupdate-no-op", version.ref = "appUpdate" }
+pinyin = { module = "com.belerweb:pinyin4j", version.ref = "pinyin" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

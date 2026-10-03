@@ -49,6 +49,12 @@ class MainActivity : ComponentActivity() {
     private fun exitApplication(container: AppContainer) {
         if (isExiting) return
         isExiting = true
+        // “按返回键退出时在后台继续播放”开启时：不销毁进程，退到后台，让媒体前台服务继续播放。
+        if (container.appPreferences.backgroundContinueOnExit()) {
+            runCatching { moveTaskToBack(true) }
+            isExiting = false
+            return
+        }
         lifecycleScope.launch {
             try {
                 container.shutdownForExit()

@@ -31,6 +31,7 @@ import com.fnmusic.tv.core.model.playback.mapping
 import com.fnmusic.tv.core.model.playback.next
 import java.util.ArrayList
 import java.util.Random
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
@@ -658,6 +659,29 @@ class PlaybackController(
         failedDirection = null
         queueError = null
         loadQueuePage(direction)
+    }
+
+    /** 歌曲磁盘缓存当前占用字节数（目录内全部文件大小之和）。 */
+    fun songCacheUsageBytes(): Long {
+        val root = File(context.filesDir, SONG_CACHE_DIRECTORY)
+        if (!root.isDirectory) return 0L
+        return root.walkTopDown().filter { it.isFile }.sumOf { runCatching { it.length() }.getOrDefault(0L) }
+    }
+
+    /**
+     * 一键清空歌曲磁盘缓存。播放服务已连接时通过自定义命令逐条移除缓存资源（不影响当前播放）；
+     * 服务未连接时直接清理缓存目录。
+     */
+    fun clearSongCache() {
+        val active = controller
+        if (active != null) {
+            runCatching { active.sendCustomCommand(PlaybackCommands.ClearSongCacheCommand, Bundle.EMPTY) }
+            return
+        }
+        val root = File(context.filesDir, SONG_CACHE_DIRECTORY)
+        if (root.isDirectory) {
+            runCatching { root.walkBottomUp().forEach { file -> file.delete() } }
+        }
     }
 
     fun clearSession(): PlaybackTransition? {

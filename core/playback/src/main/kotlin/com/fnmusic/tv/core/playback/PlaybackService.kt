@@ -6,6 +6,9 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -23,6 +26,8 @@ import java.util.ArrayList
 
 internal const val FORWARD_BUFFER_DURATION_MS = 50_000
 internal const val BACK_BUFFER_DURATION_MS = 15_000
+internal const val SONG_CACHE_DIRECTORY = "song-cache"
+internal const val SONG_CACHE_MAX_BYTES = 512L * 1024L * 1024L
 private const val LEGACY_AUDIO_CACHE_DIRECTORY = "media"
 private const val TAG = "PlaybackService"
 
@@ -93,6 +98,7 @@ internal fun deleteLegacyAudioCache(cacheDirectory: File): Boolean = runCatching
 class PlaybackService : MediaSessionService() {
     private var player: ExoPlayer? = null
     private var mediaSession: MediaSession? = null
+    private var songCache: SimpleCache? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -104,8 +110,17 @@ class PlaybackService : MediaSessionService() {
             .setUsage(C.USAGE_MEDIA)
             .build()
         val httpFactory = createPlaybackHttpDataSourceFactory()
+        // 歌曲磁盘缓存：对流式音频做本地缓存，方便断网续播，也可在设置中查看占用并一键清空。
+        val cache = SimpleCache(
+            File(filesDir, SONG_CACHE_DIRECTORY),
+            LeastRecentlyUsedCacheEvictor(SONG_CACHE_MAX_BYTES),
+        )
+        songCache = cache
+        val cachingSourceFactory = CacheDataSource.Factory()
+            .setCache(cache)
+            .setUpstreamDataSourceFactory(httpFactory)
         val exoPlayer = ExoPlayer.Builder(this, createPlaybackRenderersFactory(this))
-            .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(cachingSourceFactory))
             .setLoadControl(createPlaybackLoadControl())
             .build().apply {
             setAudioAttributes(audioAttributes, true)
@@ -119,6 +134,7 @@ class PlaybackService : MediaSessionService() {
                         .add(PlaybackCommands.ConfigureAuthCommand)
                         .add(PlaybackCommands.ClearAuthCommand)
                         .add(PlaybackCommands.SetShuffleOrderCommand)
+                        .add(PlaybackCommands.ClearSongCacheCommand)
                         .build()
                     return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                         .setAvailableSessionCommands(available)
@@ -133,6 +149,13 @@ class PlaybackService : MediaSessionService() {
                 ): ListenableFuture<SessionResult> {
                     if (customCommand.customAction == PlaybackCommands.ClearAuth) {
                         httpFactory.setDefaultRequestProperties(emptyMap())
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                    }
+                    if (customCommand.customAction == PlaybackCommands.ClearSongCache) {
+                        // 逐条移除缓存的资源；正在播放中的片段可能无法移除，但不影响当前播放。
+                        runCatching {
+                            songCache?.keys?.forEach { key -> runCatching { songCache?.removeResource(key) } }
+                        }
                         return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                     }
                     if (customCommand.customAction == PlaybackCommands.ConfigureAuth) {
@@ -179,6 +202,8 @@ class PlaybackService : MediaSessionService() {
         mediaSession = null
         player?.release()
         player = null
+        runCatching { songCache?.release() }
+        songCache = null
         super.onDestroy()
     }
 }

@@ -12,6 +12,10 @@ data class AppPreferencesState(
     val playerStyle: PlayerStyle = PlayerStyle.Poster,
     val cacheBudget: CacheBudget = CacheBudget.Default,
     val onlineLyricsMatchingEnabled: Boolean = true,
+    /** 用户自定义歌单排序（歌单 guid 列表，按展示先后排列），空表示沿用服务器默认顺序。 */
+    val playlistOrder: List<String> = emptyList(),
+    /** 按返回键退出时是否在后台继续播放。 */
+    val backgroundContinueOnExit: Boolean = false,
 )
 
 data class CacheUsage(

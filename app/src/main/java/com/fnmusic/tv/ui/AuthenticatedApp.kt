@@ -27,13 +27,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -49,6 +52,9 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -77,6 +83,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -94,6 +101,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -101,11 +109,14 @@ import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.palette.graphics.Palette
 import androidx.tv.material3.Button as TvMaterialButton
@@ -118,6 +129,7 @@ import com.fnmusic.tv.NowPlayingPresentation
 import com.fnmusic.tv.NowPlayingResourceState
 import com.fnmusic.tv.decodeArtwork
 import com.fnmusic.tv.core.data.repository.CurrentLyrics
+import com.fnmusic.tv.core.data.repository.SearchResults
 import com.fnmusic.tv.core.data.repository.SessionState
 import com.fnmusic.tv.core.model.Album
 import com.fnmusic.tv.core.model.AppError
@@ -140,6 +152,7 @@ import com.fnmusic.tv.core.model.playback.boundedQueueWindow
 import com.fnmusic.tv.core.playback.PlaybackUiState
 import com.fnmusic.tv.core.playback.PlaybackProgressState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
@@ -180,6 +193,20 @@ internal fun AuthenticatedApp(
     val open: (LibraryRoute) -> Unit = { stack = stack + it }
     val root: (LibraryRoute) -> Unit = { stack = listOf(it) }
     val back: () -> Unit = { if (stack.size > 1) stack = stack.dropLast(1) }
+    // 打开 App / 回到前台时自动同步服务器歌单（只读，不反向写入服务器）。
+    // 首次进入由首页首次加载即可拿到最新数据；此后每次回到前台都强制刷新歌单列表，
+    // 使服务器端新增/改名/删除的歌单同步显示。首页与“全部歌单”共用同一份歌单状态。
+    var playlistResumeSynced by remember(session.user.guid) { mutableStateOf(false) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        if (playlistResumeSynced) {
+            val playlistState = retainedState.list<Playlist>("playlists")
+            retainedState.syncList(playlistState) {
+                container.musicRepository.playlists(forceRefresh = true)
+            }
+        } else {
+            playlistResumeSynced = true
+        }
+    }
     LaunchedEffect(route) {
         container.updateController.setAutomaticPromptAllowed(route !is LibraryRoute.Player)
     }
@@ -225,6 +252,7 @@ internal fun AuthenticatedApp(
             container,
             playback,
             onMy = { root(LibraryRoute.My) },
+            onSearch = { open(LibraryRoute.Search) },
             onPlaylist = { open(LibraryRoute.PlaylistDetail(it)) },
             onFavorites = { open(LibraryRoute.Favorites) },
             onAll = { open(LibraryRoute.AllPlaylists) },
@@ -235,15 +263,26 @@ internal fun AuthenticatedApp(
             session,
             playback,
             onHome = { root(LibraryRoute.Home) },
+            onSearch = { open(LibraryRoute.Search) },
             onArtists = { open(LibraryRoute.Artists) },
             onAlbums = { open(LibraryRoute.Albums) },
             onAllTracks = { open(LibraryRoute.AllTracks) },
+            onPlaylists = { open(LibraryRoute.AllPlaylists) },
+            onPlaylist = { open(LibraryRoute.PlaylistDetail(it)) },
             onArtist = { open(LibraryRoute.ArtistDetail(it)) },
             onAlbum = { open(LibraryRoute.AlbumDetail(it)) },
             onSettings = { open(LibraryRoute.Settings) },
             onPlayer = { open(LibraryRoute.Player(null)) },
         )
         LibraryRoute.AllPlaylists -> AllPlaylists(container, onOpen = { open(LibraryRoute.PlaylistDetail(it)) })
+        LibraryRoute.Search -> SearchScreen(
+            container,
+            onPlayTrack = { open(LibraryRoute.Player(it)) },
+            onOpenPlaylist = { open(LibraryRoute.PlaylistDetail(it)) },
+            onOpenArtist = { open(LibraryRoute.ArtistDetail(it)) },
+            onOpenAlbum = { open(LibraryRoute.AlbumDetail(it)) },
+            onBack = back,
+        )
         is LibraryRoute.PlaylistDetail -> TrackCollection(
             container = container,
             stateKey = "playlist:${route.playlist.guid.value}:tracks",
@@ -344,11 +383,13 @@ private fun LibraryTopBar(
     selectedHome: Boolean,
     onHome: () -> Unit,
     onMy: () -> Unit,
+    onSearch: () -> Unit,
     onPlayer: () -> Unit,
     modifier: Modifier = Modifier,
     nowPlayingFocus: FocusRequester,
     homeTabFocus: FocusRequester,
     myTabFocus: FocusRequester,
+    searchFocus: FocusRequester,
     contentDownFocus: FocusRequester,
 ) {
     Row(
@@ -362,7 +403,7 @@ private fun LibraryTopBar(
                 onClick = onPlayer,
                 modifier = modifier
                     .focusProperties {
-                        right = homeTabFocus
+                        right = searchFocus
                         down = contentDownFocus
                     }
                     .focusRequester(nowPlayingFocus),
@@ -370,26 +411,38 @@ private fun LibraryTopBar(
         } else {
             Spacer(Modifier)
         }
-        SegmentedLibraryTabs(
-            selectedHome = selectedHome,
-            playbackAvailable = playback.hasMedia,
-            homeFocus = homeTabFocus,
-            myFocus = myTabFocus,
-            nowPlayingFocus = nowPlayingFocus,
-            contentDownFocus = contentDownFocus,
-            onHome = onHome,
-            onMy = onMy,
-        )
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            LibraryTab(
+                label = "搜索",
+                selected = false,
+                modifier = Modifier
+                    .focusProperties {
+                        left = if (playback.hasMedia) nowPlayingFocus else homeTabFocus
+                        right = homeTabFocus
+                        down = contentDownFocus
+                    }
+                    .focusRequester(searchFocus),
+                onClick = onSearch,
+            )
+            SegmentedLibraryTabs(
+                selectedHome = selectedHome,
+                homeFocus = homeTabFocus,
+                myFocus = myTabFocus,
+                searchFocus = searchFocus,
+                contentDownFocus = contentDownFocus,
+                onHome = onHome,
+                onMy = onMy,
+            )
+        }
     }
 }
 
 @Composable
 private fun SegmentedLibraryTabs(
     selectedHome: Boolean,
-    playbackAvailable: Boolean,
     homeFocus: FocusRequester,
     myFocus: FocusRequester,
-    nowPlayingFocus: FocusRequester,
+    searchFocus: FocusRequester,
     contentDownFocus: FocusRequester,
     onHome: () -> Unit,
     onMy: () -> Unit,
@@ -408,7 +461,7 @@ private fun SegmentedLibraryTabs(
             selected = selectedHome,
             modifier = Modifier
                 .focusProperties {
-                    left = if (playbackAvailable) nowPlayingFocus else FocusRequester.Cancel
+                    left = searchFocus
                     right = myFocus
                     down = contentDownFocus
                 }
@@ -583,25 +636,29 @@ private fun BrowseHome(
     container: AuthenticatedAppDependencies,
     playback: PlaybackUiState,
     onMy: () -> Unit,
+    onSearch: () -> Unit,
     onPlaylist: (Playlist) -> Unit,
     onFavorites: () -> Unit,
     onAll: () -> Unit,
     onPlayer: () -> Unit,
 ) {
     val retainedStore = LocalLibraryRetainedState.current
+    val preferences by container.appPreferences.state.collectAsStateWithLifecycle()
     val playlistState = retainedStore.list<Playlist>("playlists")
     val albumState = retainedStore.paged<Album>("grid:albums")
     val favoritePreviewState = retainedStore.paged<Track>("home:favorites-preview")
     val favoriteLibraryState by container.musicRepository.favoriteState.collectAsStateWithLifecycle()
     val playlistSnapshot = playlistState.snapshot
     val playlists = playlistSnapshot.entries
+    // 首页只展示用户排序后的前 3 个歌单 + “全部歌单”入口。
+    val homePlaylists = applyPlaylistOrder(playlists, preferences.playlistOrder).take(3)
     val playlistsLoaded = playlistSnapshot.initialLoadCompleted
     val albums = albumState.snapshot.entries
     val favoriteTracks = favoritePreviewState.snapshot.entries
-    val roamArtwork = remember(albums, playlists) {
+    val roamArtwork = remember(albums, homePlaylists) {
         featureArtworkSlots(
             primary = albums.map { FeatureArtworkItem(it.name, it.coverId) },
-            fallback = playlists.map { FeatureArtworkItem(it.name, it.coverId) },
+            fallback = homePlaylists.map { FeatureArtworkItem(it.name, it.coverId) },
         )
     }
     val favoriteArtwork = remember(favoriteTracks) {
@@ -617,6 +674,7 @@ private fun BrowseHome(
     val nowPlayingFocus = remember { FocusRequester() }
     val homeTabFocus = remember { FocusRequester() }
     val myTabFocus = remember { FocusRequester() }
+    val searchFocus = remember { FocusRequester() }
     val roamFocus = remember { FocusRequester() }
     val favoritesFocus = remember { FocusRequester() }
     val playlistRowFocus = remember { FocusRequester() }
@@ -643,7 +701,7 @@ private fun BrowseHome(
             add("roam")
             add("favorites")
             if (playlistsLoaded) {
-                addAll(playlists.take(12).map { "playlist:${it.guid.value}" })
+                addAll(homePlaylists.map { "playlist:${it.guid.value}" })
                 add("all-playlists")
             }
             if (playback.hasMedia) add("now-playing")
@@ -661,6 +719,7 @@ private fun BrowseHome(
             selectedHome = true,
             onHome = {},
             onMy = onMy,
+            onSearch = onSearch,
             onPlayer = {
                 focusedKey = "now-playing"
                 onPlayer()
@@ -671,6 +730,7 @@ private fun BrowseHome(
             nowPlayingFocus = nowPlayingFocus,
             homeTabFocus = homeTabFocus,
             myTabFocus = myTabFocus,
+            searchFocus = searchFocus,
             contentDownFocus = roamFocus,
         )
         Spacer(Modifier.height(12.dp))
@@ -740,7 +800,7 @@ private fun BrowseHome(
             contentPadding = PaddingValues(4.dp),
             horizontalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            itemsIndexed(playlists.take(12), key = { _, playlist -> playlist.guid.value }) { index, playlist ->
+            itemsIndexed(homePlaylists.take(3), key = { _, playlist -> playlist.guid.value }) { index, playlist ->
                 val key = "playlist:${playlist.guid.value}"
                 HomePlaylistLockup(
                     title = playlist.name,
@@ -798,6 +858,23 @@ internal fun featureArtworkSlots(
         .distinctBy { it.coverId }
         .take(limit)
         .toList()
+}
+
+/**
+ * 把用户自定义歌单顺序（guid 列表）应用到歌单列表：
+ * 已知 guid 先按用户顺序排列，其余歌单保持服务器原有顺序追加在末尾。
+ * order 为空时直接返回服务器顺序。
+ */
+internal fun applyPlaylistOrder(
+    playlists: List<Playlist>,
+    order: List<String>,
+): List<Playlist> {
+    if (order.isEmpty()) return playlists
+    val byGuid = playlists.associateBy { it.guid.value }
+    val ordered = order.mapNotNull(byGuid::get)
+    val known = order.toSet()
+    val remaining = playlists.filter { it.guid.value !in known }
+    return ordered + remaining
 }
 
 @Composable
@@ -1058,19 +1135,27 @@ private fun BrowseMy(
     session: SessionState.SignedIn,
     playback: PlaybackUiState,
     onHome: () -> Unit,
+    onSearch: () -> Unit,
     onArtists: () -> Unit,
     onAlbums: () -> Unit,
     onAllTracks: () -> Unit,
+    onPlaylists: () -> Unit,
+    onPlaylist: (Playlist) -> Unit,
     onArtist: (Artist) -> Unit,
     onAlbum: (Album) -> Unit,
     onSettings: () -> Unit,
     onPlayer: () -> Unit,
 ) {
     val retainedStore = LocalLibraryRetainedState.current
+    val preferences by container.appPreferences.state.collectAsStateWithLifecycle()
     val artistState = retainedStore.paged<Artist>("grid:artists")
     val albumState = retainedStore.paged<Album>("grid:albums")
+    val playlistState = retainedStore.list<Playlist>("playlists")
     val artists = artistState.snapshot.entries
     val albums = albumState.snapshot.entries
+    val playlists = playlistState.snapshot.entries
+    val myPlaylists = applyPlaylistOrder(playlists, preferences.playlistOrder).take(8)
+    val playlistsLoaded = playlistState.snapshot.initialLoadCompleted
     val artistsLoaded = artistState.snapshot.initialLoadCompleted
     val albumsLoaded = albumState.snapshot.initialLoadCompleted
     var focusedKey by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1079,10 +1164,12 @@ private fun BrowseMy(
     val nowPlayingFocus = remember { FocusRequester() }
     val homeTabFocus = remember { FocusRequester() }
     val myTabFocus = remember { FocusRequester() }
+    val searchFocus = remember { FocusRequester() }
     val settingsFocus = remember { FocusRequester() }
     val switchAccountFocus = remember { FocusRequester() }
     val artistRowFocus = remember { FocusRequester() }
     val albumRowFocus = remember { FocusRequester() }
+    val playlistRowFocus = remember { FocusRequester() }
     val libraryRowFocus = remember { FocusRequester() }
     val listState = rememberLazyListState()
     val scope = retainedStore.scope
@@ -1095,6 +1182,7 @@ private fun BrowseMy(
             albumState,
             { page -> container.musicRepository.albums(page, FULL_CATALOG_PAGE_SIZE) },
         ) { it.guid.value }
+        retainedStore.loadListOnce(playlistState, container.musicRepository::playlists)
     }
     LaunchedEffect(artistsLoaded, albumsLoaded, playback.hasMedia, focusedKey) {
         if (initialFocusRequested) return@LaunchedEffect
@@ -1108,6 +1196,9 @@ private fun BrowseMy(
                 add("all-artists")
                 addAll(albums.take(8).map { "album:${it.guid.value}" })
                 add("all-albums")
+                addAll(myPlaylists.map { "playlist:${it.guid.value}" })
+                add("all-playlists")
+                add("sync-playlists")
                 add("all-tracks")
             }
             if (playback.hasMedia) add("now-playing")
@@ -1132,6 +1223,7 @@ private fun BrowseMy(
             selectedHome = false,
             onHome = onHome,
             onMy = {},
+            onSearch = onSearch,
             onPlayer = {
                 focusedKey = "now-playing"
                 onPlayer()
@@ -1142,6 +1234,7 @@ private fun BrowseMy(
             nowPlayingFocus = nowPlayingFocus,
             homeTabFocus = homeTabFocus,
             myTabFocus = myTabFocus,
+            searchFocus = searchFocus,
             contentDownFocus = settingsFocus,
         )
         Spacer(Modifier.height(12.dp))
@@ -1207,8 +1300,38 @@ private fun BrowseMy(
                     contentFocus,
                     rowFocusRequester = albumRowFocus,
                     upFocusRequester = artistRowFocus,
+                    downFocusRequester = playlistRowFocus,
+                    onFocused = { focusedKey = it },
+                )
+            }
+            item {
+                MediaBand(
+                    "歌单",
+                    myPlaylists.map { playlist ->
+                        val key = "playlist:${playlist.guid.value}"
+                        BandEntry(playlist.name, "${playlist.trackCount ?: 0} 首歌曲", playlist.coverId, BandKind.Playlist, key) {
+                            focusedKey = key
+                            onPlaylist(playlist)
+                        }
+                    },
+                    BandEntry("全部歌单", "浏览完整列表", null, BandKind.Playlist, "all-playlists", glyph = PlaylistGlyph.All) {
+                        focusedKey = "all-playlists"
+                        onPlaylists()
+                    },
+                    focusedKey,
+                    contentFocus,
+                    rowFocusRequester = playlistRowFocus,
+                    upFocusRequester = albumRowFocus,
                     downFocusRequester = libraryRowFocus,
                     onFocused = { focusedKey = it },
+                    extraTerminalEntry = BandEntry("同步歌单", "刷新最新自建歌单", null, BandKind.Playlist, "sync-playlists", glyph = PlaylistGlyph.Sync) {
+                        focusedKey = "sync-playlists"
+                        scope.launch {
+                            retainedStore.syncList(playlistState) {
+                                container.musicRepository.playlists(forceRefresh = true)
+                            }
+                        }
+                    },
                 )
             }
             item {
@@ -1222,7 +1345,7 @@ private fun BrowseMy(
                     focusedKey,
                     contentFocus,
                     rowFocusRequester = libraryRowFocus,
-                    upFocusRequester = albumRowFocus,
+                    upFocusRequester = playlistRowFocus,
                     downFocusRequester = FocusRequester.Cancel,
                     onFocused = { focusedKey = it },
                 )
@@ -1426,7 +1549,9 @@ private fun ProfileGlyphCanvas(
     }
 }
 
-private enum class BandKind { Artist, Album, Library }
+private enum class BandKind { Artist, Album, Library, Playlist }
+
+private enum class PlaylistGlyph { All, Sync }
 
 private data class BandEntry(
     val title: String,
@@ -1434,7 +1559,8 @@ private data class BandEntry(
     val coverId: String?,
     val kind: BandKind,
     val focusKey: String,
-    val action: (() -> Unit)?,
+    val glyph: PlaylistGlyph? = null,
+    val action: (() -> Unit)? = null,
 )
 
 internal fun mediaBandReturnFocusKey(
@@ -1457,16 +1583,18 @@ private fun MediaBand(
     upFocusRequester: FocusRequester,
     downFocusRequester: FocusRequester,
     onFocused: (String) -> Unit,
+    extraTerminalEntry: BandEntry? = null,
 ) {
     var lastFocusedEntryKey by rememberSaveable(terminalEntry.focusKey) {
         mutableStateOf<String?>(null)
     }
     val entryKeys = entries.map(BandEntry::focusKey)
+    val terminalKeys = listOfNotNull(terminalEntry.focusKey, extraTerminalEntry?.focusKey)
     val returnFocusKey = mediaBandReturnFocusKey(
         entryKeys = entryKeys,
-        terminalKey = terminalEntry.focusKey,
+        terminalKey = terminalKeys.firstOrNull() ?: terminalEntry.focusKey,
         lastFocusedKey = lastFocusedEntryKey,
-    )
+    ).let { key -> key.takeIf { it in entryKeys || it in terminalKeys } ?: terminalEntry.focusKey }
     Column {
         Text(title, fontSize = 25.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
@@ -1499,7 +1627,8 @@ private fun MediaBand(
                     Modifier
                         .focusProperties {
                             if (entries.isEmpty()) left = FocusRequester.Cancel
-                            right = FocusRequester.Cancel
+                            // 有额外末尾条目（如“同步歌单”）时右向焦点放行，让焦点可移动到该条目。
+                            if (extraTerminalEntry == null) right = FocusRequester.Cancel
                             up = upFocusRequester
                             down = downFocusRequester
                         }
@@ -1512,6 +1641,27 @@ private fun MediaBand(
                             }
                         },
                 )
+            }
+            if (extraTerminalEntry != null) {
+                item {
+                    BandLockup(
+                        extraTerminalEntry,
+                        Modifier
+                            .focusProperties {
+                                right = FocusRequester.Cancel
+                                up = upFocusRequester
+                                down = downFocusRequester
+                            }
+                            .then(if (returnFocusKey == extraTerminalEntry.focusKey) Modifier.focusRequester(rowFocusRequester) else Modifier)
+                            .then(if (focusedKey == extraTerminalEntry.focusKey) Modifier.focusRequester(focusRequester) else Modifier)
+                            .onFocusChanged {
+                                if (it.isFocused) {
+                                    lastFocusedEntryKey = extraTerminalEntry.focusKey
+                                    onFocused(extraTerminalEntry.focusKey)
+                                }
+                            },
+                    )
+                }
             }
         }
     }
@@ -1537,6 +1687,14 @@ private fun BandLockup(entry: BandEntry, modifier: Modifier = Modifier) {
         BandKind.Library -> MyLibraryLockup(
             entry.title,
             entry.subtitle,
+            modifier = modifier,
+            enabled = entry.action != null,
+        ) { entry.action?.invoke() }
+        BandKind.Playlist -> PlaylistBandLockup(
+            entry.title,
+            entry.subtitle,
+            entry.coverId,
+            glyph = entry.glyph,
             modifier = modifier,
             enabled = entry.action != null,
         ) { entry.action?.invoke() }
@@ -1577,17 +1735,283 @@ private fun MyLibraryLockup(
 }
 
 @Composable
+private fun PlaylistBandLockup(
+    title: String,
+    subtitle: String,
+    coverId: String?,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    glyph: PlaylistGlyph? = null,
+    onClick: () -> Unit,
+) {
+    val container = LocalAuthenticatedDependencies.current
+    val shape = RoundedCornerShape(8.dp)
+    val artworkShape = RoundedCornerShape(4.dp)
+    Button(
+        enabled = enabled,
+        onClick = onClick,
+        modifier = modifier.size(width = 170.dp, height = 95.dp),
+        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
+        scale = ButtonDefaults.scale(focusedScale = 1.025f),
+        colors = lockupButtonColors(),
+        border = lockupButtonBorder(shape),
+        contentPadding = PaddingValues(7.dp),
+    ) {
+        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+            when {
+                glyph != null -> PlaylistGlyphIcon(
+                    glyph = glyph,
+                    color = FnColors.Coral,
+                    modifier = Modifier.size(61.dp).background(Color(0xFF2D4A46), artworkShape),
+                )
+                coverId != null -> RemoteArtwork(
+                    container = container,
+                    coverId = coverId,
+                    variant = CoverVariant.Compact,
+                    modifier = Modifier.size(61.dp),
+                    shape = artworkShape,
+                    contentScale = ContentScale.Crop,
+                    placeholderContent = {
+                        InitialArtworkPlaceholder(title, FnColors.Coral, Modifier.size(61.dp), artworkShape)
+                    },
+                )
+                else -> InitialArtworkPlaceholder(title, FnColors.Coral, Modifier.size(61.dp), artworkShape)
+            }
+            Spacer(Modifier.width(10.dp))
+            LockupLabels(title, subtitle, Modifier.weight(1f))
+        }
+    }
+}
+
+/** “全部歌单 / 同步歌单”操作条目的图标：全部=四宫格，同步=双向环形箭头。 */
+@Composable
+private fun PlaylistGlyphIcon(
+    glyph: PlaylistGlyph,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier) {
+        when (glyph) {
+            PlaylistGlyph.All -> {
+                // 四宫格：2x2 圆角方块
+                val cell = size.minDimension * 0.30f
+                val gap = size.minDimension * 0.12f
+                val left = (size.width - cell * 2 - gap) / 2
+                val top = (size.height - cell * 2 - gap) / 2
+                listOf(
+                    androidx.compose.ui.geometry.Offset(left, top),
+                    androidx.compose.ui.geometry.Offset(left + cell + gap, top),
+                    androidx.compose.ui.geometry.Offset(left, top + cell + gap),
+                    androidx.compose.ui.geometry.Offset(left + cell + gap, top + cell + gap),
+                ).forEach { origin ->
+                    drawRoundRect(
+                        color = color,
+                        topLeft = origin,
+                        size = androidx.compose.ui.geometry.Size(cell, cell),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(cell * 0.22f),
+                    )
+                }
+            }
+            PlaylistGlyph.Sync -> {
+                // 双向环形刷新箭头：两条相对的圆弧
+                val stroke = 2.2.dp.toPx()
+                val radius = size.minDimension * 0.34f
+                val center = this.center
+                val rect = androidx.compose.ui.geometry.Rect(
+                    center.x - radius,
+                    center.y - radius,
+                    center.x + radius,
+                    center.y + radius,
+                )
+                drawArc(
+                    color = color,
+                    startAngle = 205f,
+                    sweepAngle = 190f,
+                    useCenter = false,
+                    topLeft = androidx.compose.ui.geometry.Offset(rect.left, rect.top),
+                    size = androidx.compose.ui.geometry.Size(rect.width, rect.height),
+                    style = Stroke(width = stroke, cap = StrokeCap.Round),
+                )
+                drawArc(
+                    color = color,
+                    startAngle = 25f,
+                    sweepAngle = -190f,
+                    useCenter = false,
+                    topLeft = androidx.compose.ui.geometry.Offset(rect.left, rect.top),
+                    size = androidx.compose.ui.geometry.Size(rect.width, rect.height),
+                    style = Stroke(width = stroke, cap = StrokeCap.Round),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun AllPlaylists(container: AuthenticatedAppDependencies, onOpen: (Playlist) -> Unit) {
     val retainedStore = LocalLibraryRetainedState.current
     val playlistState = retainedStore.list<Playlist>("playlists")
     val playlists = playlistState.snapshot.entries
+    val preferences by container.appPreferences.state.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         retainedStore.loadListOnce(playlistState, container.musicRepository::playlists)
     }
-    GridPage("全部歌单", playlists, { it.guid.value }) { playlist, modifier ->
-        PlaylistTile(playlist.name, "歌单", playlist.coverId, FnColors.Coral, modifier = modifier) { onOpen(playlist) }
+    // 用户自定义排序（guid 草稿）：非空时用其显示；为空时用“用户排序 + 服务器顺序”的基准顺序。
+    var draftGuids by remember(playlists, preferences.playlistOrder) {
+        mutableStateOf<List<String>?>(null)
+    }
+    val baseOrdered = applyPlaylistOrder(playlists, preferences.playlistOrder)
+    val displayList = if (draftGuids != null) {
+        draftGuids.orEmpty().mapNotNull { guid -> playlists.firstOrNull { it.guid.value == guid } }
+    } else {
+        baseOrdered
+    }
+    var reordering by remember { mutableStateOf(false) }
+    var focusedIndex by remember { mutableStateOf(0) }
+    var centerDownAt by remember { mutableStateOf(0L) }
+    val listState = rememberLazyListState()
+    val focusRequesters = remember(displayList.size) { List(displayList.size) { FocusRequester() } }
+    var initialFocusRequested by remember { mutableStateOf(false) }
+
+    fun startReorder() {
+        if (displayList.isEmpty()) return
+        draftGuids = draftGuids ?: displayList.map { it.guid.value }
+        reordering = true
+    }
+
+    fun commitReorder() {
+        draftGuids?.let { container.appPreferences.setPlaylistOrder(it) }
+        draftGuids = null
+        reordering = false
+    }
+
+    fun cancelReorder() {
+        draftGuids = null
+        reordering = false
+    }
+
+    fun moveBy(direction: Int) {
+        if (!reordering) return
+        val from = focusedIndex
+        val to = (from + direction).coerceIn(displayList.indices)
+        if (to == from) return
+        val guids = (draftGuids ?: displayList.map { it.guid.value }).toMutableList()
+        val moved = guids.removeAt(from)
+        guids.add(to, moved)
+        draftGuids = guids
+        focusedIndex = to
+        runCatching { focusRequesters[to].requestFocus() }
+        scope.launch { runCatching { listState.animateScrollToItem(to) } }
+    }
+
+    LaunchedEffect(displayList.size, focusedIndex, reordering) {
+        if (displayList.isEmpty() || initialFocusRequested && !reordering) return@LaunchedEffect
+        val target = if (reordering) focusedIndex else focusedIndex.coerceIn(0, displayList.lastIndex.coerceAtLeast(0))
+        runCatching { focusRequesters[target].requestFocus() }
+        if (!reordering) initialFocusRequested = true
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 64.dp, vertical = 28.dp)
+            .onPreviewKeyEvent { event ->
+                val key = event.key
+                val type = event.type
+                if (key == Key.DirectionCenter || key == Key.Enter) {
+                    if (type == KeyEventType.KeyDown) {
+                        // 只记录首次按下的时间；遥控器长按会触发按键自动重复，不能每次都重置计时。
+                        if (centerDownAt == 0L) centerDownAt = SystemClock.elapsedRealtime()
+                    } else if (type == KeyEventType.KeyUp) {
+                        val held = SystemClock.elapsedRealtime() - centerDownAt
+                        if (reordering) {
+                            commitReorder()
+                        } else if (held >= REORDER_LONG_PRESS_THRESHOLD_MS) {
+                            startReorder()
+                        } else {
+                            displayList.getOrNull(focusedIndex)?.let(onOpen)
+                        }
+                        centerDownAt = 0L
+                    }
+                    return@onPreviewKeyEvent true
+                }
+                if (reordering && (key == Key.DirectionLeft || key == Key.DirectionRight)) {
+                    if (type == KeyEventType.KeyDown) {
+                        moveBy(if (key == Key.DirectionRight) 1 else -1)
+                    }
+                    return@onPreviewKeyEvent true
+                }
+                if (key == Key.Back && type == KeyEventType.KeyDown) {
+                    if (reordering) {
+                        cancelReorder()
+                        return@onPreviewKeyEvent true
+                    }
+                }
+                false
+            },
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column {
+                    Text("全部歌单", fontSize = 30.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        if (reordering) {
+                            "排序模式：按左右键移动歌单，按确定键保存排序"
+                        } else {
+                            "共 ${displayList.size} 个歌单 · 长按确定键进入排序"
+                        },
+                        color = FnColors.Muted,
+                        fontSize = 15.sp,
+                    )
+                }
+                if (reordering) {
+                    Text("排序中…", color = FnColors.Coral, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            if (displayList.isEmpty()) {
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    Text("还没有歌单", color = FnColors.Muted, fontSize = 19.sp)
+                }
+            } else {
+                LazyRow(
+                    state = listState,
+                    contentPadding = PaddingValues(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(18.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    itemsIndexed(displayList, key = { _, playlist -> playlist.guid.value }) { index, playlist ->
+                        val isMoving = reordering && index == focusedIndex
+                        PlaylistTile(
+                            title = playlist.name,
+                            subtitle = if (isMoving) "←  → 移动" else "歌单",
+                            coverId = playlist.coverId,
+                            accent = FnColors.Coral,
+                            modifier = Modifier
+                                .focusRequester(focusRequesters[index])
+                                .focusProperties {
+                                    up = FocusRequester.Cancel
+                                    down = FocusRequester.Cancel
+                                }
+                                .onFocusChanged { if (it.isFocused) focusedIndex = index },
+                            onClick = {
+                                focusedIndex = index
+                                onOpen(playlist)
+                            },
+                        )
+                    }
+                }
+            }
+        }
     }
 }
+
+private const val REORDER_LONG_PRESS_THRESHOLD_MS = 600L
 
 @Composable
 private fun ArtistGrid(container: AuthenticatedAppDependencies, onOpen: (Artist) -> Unit) {
@@ -3480,4 +3904,256 @@ internal fun appErrorMessage(error: AppError): String = when (error) {
 internal fun formatDuration(ms: Long): String {
     val totalSeconds = (ms / 1_000).coerceAtLeast(0)
     return "%d:%02d".format(totalSeconds / 60, totalSeconds % 60)
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SearchScreen(
+    container: AuthenticatedAppDependencies,
+    onPlayTrack: (Track) -> Unit,
+    onOpenPlaylist: (Playlist) -> Unit,
+    onOpenArtist: (Artist) -> Unit,
+    onOpenAlbum: (Album) -> Unit,
+    onBack: () -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    var results by remember { mutableStateOf<SearchResults?>(null) }
+    var searching by remember { mutableStateOf(false) }
+    var searchError by remember { mutableStateOf<AppError?>(null) }
+    var searchJob by remember { mutableStateOf<Job?>(null) }
+    val scope = rememberCoroutineScope()
+    val inputFocus = remember { FocusRequester() }
+
+    fun runSearch(keyword: String) {
+        val trimmed = keyword.trim()
+        if (trimmed.isEmpty()) return
+        searchJob?.cancel()
+        searching = true
+        searchError = null
+        searchJob = scope.launch {
+            runCatching { container.musicRepository.search(trimmed) }
+                .onSuccess {
+                    results = it
+                    searching = false
+                }
+                .onFailure {
+                    searchError = (it as? AppException)?.error ?: AppError.Unknown()
+                    searching = false
+                }
+        }
+    }
+
+    BackHandler { onBack() }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 64.dp, vertical = 24.dp),
+    ) {
+        Text("搜索", fontSize = 30.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(14.dp))
+        SearchField(
+            value = query,
+            onValueChange = { query = it },
+            onSubmit = { runSearch(query) },
+            focusRequester = inputFocus,
+            onFocusStateChange = {},
+        )
+        Spacer(Modifier.height(16.dp))
+        when {
+            searching -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("正在搜索…", color = FnColors.Muted, fontSize = 19.sp)
+            }
+            searchError != null -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    InlineError(searchError!!)
+                    Spacer(Modifier.height(10.dp))
+                    TvMaterialButton(onClick = { runSearch(query) }) {
+                        Text("重试", fontSize = 17.sp)
+                    }
+                }
+            }
+            results != null && results!!.isEmpty -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("没有找到与“${query.trim()}”相关的内容", color = FnColors.Muted, fontSize = 19.sp)
+            }
+            results != null -> SearchResultsContent(
+                results = results!!,
+                onPlayTrack = onPlayTrack,
+                onOpenPlaylist = onOpenPlaylist,
+                onOpenArtist = onOpenArtist,
+                onOpenAlbum = onOpenAlbum,
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            )
+            else -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("搜索歌曲、歌手、歌单、专辑", color = FnColors.Muted, fontSize = 19.sp)
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        runCatching { inputFocus.requestFocus() }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SearchField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    focusRequester: FocusRequester,
+    onFocusStateChange: (Boolean) -> Unit,
+) {
+    var editing by remember { mutableStateOf(true) }
+    var focused by remember { mutableStateOf(false) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val imeVisible = WindowInsets.isImeVisible
+    var imeWasVisible by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(10.dp)
+
+    LaunchedEffect(editing) {
+        if (editing) {
+            delay(250)
+            runCatching { keyboard?.show() }
+        }
+    }
+    LaunchedEffect(editing, imeVisible) {
+        when {
+            !editing -> imeWasVisible = false
+            imeVisible -> imeWasVisible = true
+            imeWasVisible -> {
+                editing = false
+                imeWasVisible = false
+            }
+        }
+    }
+
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(58.dp)
+            .focusRequester(focusRequester)
+            .onFocusChanged {
+                focused = it.isFocused
+                onFocusStateChange(it.isFocused)
+                if (!it.isFocused) editing = false
+            }
+            .onPreviewKeyEvent { event ->
+                val key = event.key
+                if (key == Key.Enter || key == Key.DirectionCenter) {
+                    when (event.type) {
+                        KeyEventType.KeyDown -> if (!editing) editing = true
+                        KeyEventType.KeyUp -> if (editing) onSubmit()
+                        else -> Unit
+                    }
+                    return@onPreviewKeyEvent true
+                }
+                false
+            }
+            .background(if (focused) FnColors.FocusFill else Color(0xFF171B1D), shape)
+            .border(1.dp, if (focused) FnColors.Coral else Color.White.copy(alpha = 0.12f), shape)
+            .padding(horizontal = 18.dp, vertical = 12.dp),
+        readOnly = !editing,
+        textStyle = TextStyle(fontSize = 19.sp, color = FnColors.Text),
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
+        cursorBrush = SolidColor(FnColors.Coral),
+        decorationBox = { innerTextField ->
+            Box(contentAlignment = Alignment.CenterStart) {
+                if (value.isEmpty() && !editing) {
+                    Text("输入关键词，搜索歌曲、歌手、歌单、专辑", color = FnColors.Muted, fontSize = 17.sp)
+                }
+                innerTextField()
+            }
+        },
+    )
+}
+
+@Composable
+private fun SearchResultsContent(
+    results: SearchResults,
+    onPlayTrack: (Track) -> Unit,
+    onOpenPlaylist: (Playlist) -> Unit,
+    onOpenArtist: (Artist) -> Unit,
+    onOpenAlbum: (Album) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyColumn(
+        state = rememberLazyListState(),
+        contentPadding = PaddingValues(bottom = 32.dp),
+        modifier = modifier,
+    ) {
+        if (results.tracks.isNotEmpty()) {
+            item { SearchSectionTitle("歌曲") }
+            itemsIndexed(results.tracks.take(30), key = { _, track -> track.guid.value }) { index, track ->
+                DetailTrackRow(
+                    index = index,
+                    track = track,
+                    enabled = isTrackPlayable(track),
+                    modifier = Modifier.padding(vertical = 2.dp),
+                    onClick = { onPlayTrack(track) },
+                )
+            }
+        }
+        if (results.artists.isNotEmpty()) {
+            item {
+                SearchSectionTitle("歌手")
+                Spacer(Modifier.height(6.dp))
+            }
+            item {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(2.dp)) {
+                    items(results.artists.take(20), key = { it.guid.value }) { artist ->
+                        ArtistLockup(artist.name, "${artist.trackCount ?: 0} 首歌曲", artist.coverId) {
+                            onOpenArtist(artist)
+                        }
+                    }
+                }
+            }
+        }
+        if (results.playlists.isNotEmpty()) {
+            item {
+                SearchSectionTitle("歌单")
+                Spacer(Modifier.height(6.dp))
+            }
+            item {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(2.dp)) {
+                    items(results.playlists.take(20), key = { it.guid.value }) { playlist ->
+                        PlaylistBandLockup(playlist.name, "${playlist.trackCount ?: 0} 首歌曲", playlist.coverId) {
+                            onOpenPlaylist(playlist)
+                        }
+                    }
+                }
+            }
+        }
+        if (results.albums.isNotEmpty()) {
+            item {
+                SearchSectionTitle("专辑")
+                Spacer(Modifier.height(6.dp))
+            }
+            item {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(2.dp)) {
+                    items(results.albums.take(20), key = { it.guid.value }) { album ->
+                        AlbumLockup(album.name, album.artistName.orEmpty(), album.coverId) {
+                            onOpenAlbum(album)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchSectionTitle(title: String) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, fontSize = 23.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.height(1.dp).width(28.dp).background(FnColors.Coral, CircleShape))
+    }
 }

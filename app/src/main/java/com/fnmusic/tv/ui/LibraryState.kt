@@ -26,6 +26,7 @@ internal sealed interface LibraryRoute {
     data class AlbumDetail(val album: Album) : LibraryRoute
     data class Player(val track: Track?) : LibraryRoute
     data object Settings : LibraryRoute
+    data object Search : LibraryRoute
 }
 
 internal data class RetainedPageSnapshot<T>(
@@ -216,6 +217,29 @@ internal class LibraryRetainedStateStore(val scope: CoroutineScope) {
         }
     }
 
+    /**
+     * 强制从 [loader] 重新拉取列表并覆盖已保留的列表数据（用于“打开 App 时同步歌单”）。
+     * 与 [loadListOnce] 共用同一个 loading 标志，避免并发重复加载；同步成功时整体替换
+     * 快照，失败时若已有数据则保留原样（后台同步不应清空已展示内容）。
+     */
+    fun <T> syncList(state: RetainedListState<T>, loader: suspend () -> List<T>) {
+        if (state.loading) return
+        state.loading = true
+        scope.launch {
+            runCatching { loader() }
+                .onSuccess { state.snapshot = RetainedListSnapshot(entries = it, initialLoadCompleted = true) }
+                .onFailure { cause ->
+                    if (state.snapshot.entries.isEmpty()) {
+                        state.snapshot = state.snapshot.copy(
+                            error = (cause as? AppException)?.error ?: AppError.Unknown(),
+                            initialLoadCompleted = true,
+                        )
+                    }
+                }
+            state.loading = false
+        }
+    }
+
     fun <T> loadFirstPageOnce(
         state: RetainedPagedGridState<T>,
         loader: suspend (Int) -> Page<T>,
@@ -299,6 +323,7 @@ internal fun LibraryRoute.storageKey(): String = when (this) {
     is LibraryRoute.AlbumDetail -> "album:${album.guid.value}"
     is LibraryRoute.Player -> "player"
     LibraryRoute.Settings -> "settings"
+    LibraryRoute.Search -> "search"
 }
 
 internal fun LibraryRoute.retainedStateKeys(): Set<String> = when (this) {

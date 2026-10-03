@@ -19,6 +19,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -71,18 +77,26 @@ internal fun SettingsScreen(container: AuthenticatedAppDependencies) {
     val coverStyleFocus = remember { FocusRequester() }
     val posterStyleFocus = remember { FocusRequester() }
     val onlineLyricsFocus = remember { FocusRequester() }
+    val backgroundContinueFocus = remember { FocusRequester() }
     val cacheFocuses = remember { List(CacheBudget.entries.size) { FocusRequester() } }
     val clearCacheFocus = remember { FocusRequester() }
+    val songCacheClearFocus = remember { FocusRequester() }
     val updateFocus = remember { FocusRequester() }
     var usage by remember { mutableStateOf(CacheUsage(artworkBytes = 0, indexBytes = 0)) }
+    var songCacheBytes by remember { mutableStateOf(0L) }
 
     suspend fun refreshUsage() {
         usage = container.musicRepository.cacheUsage()
     }
 
+    suspend fun refreshSongCacheUsage() {
+        songCacheBytes = container.playbackController.songCacheUsageBytes()
+    }
+
     LaunchedEffect(Unit) {
         container.musicRepository.applyArtworkBudget()
         refreshUsage()
+        refreshSongCacheUsage()
     }
     LaunchedEffect(Unit) {
         yield()
@@ -164,11 +178,31 @@ internal fun SettingsScreen(container: AuthenticatedAppDependencies) {
                         modifier = Modifier
                             .focusProperties {
                                 up = coverStyleFocus
-                                down = cacheFocuses.first()
+                                down = backgroundContinueFocus
                                 left = FocusRequester.Cancel
                                 right = FocusRequester.Cancel
                             }
                             .focusRequester(onlineLyricsFocus),
+                    )
+                }
+                SettingsDivider()
+                SettingsRow(label = "播放行为", height = 76.dp) {
+                    SettingsCheckbox(
+                        label = "按返回键退出时在后台继续播放",
+                        selected = preferences.backgroundContinueOnExit,
+                        onClick = {
+                            container.appPreferences.setBackgroundContinueOnExit(
+                                !preferences.backgroundContinueOnExit,
+                            )
+                        },
+                        modifier = Modifier
+                            .focusProperties {
+                                up = onlineLyricsFocus
+                                down = cacheFocuses.first()
+                                left = FocusRequester.Cancel
+                                right = FocusRequester.Cancel
+                            }
+                            .focusRequester(backgroundContinueFocus),
                     )
                 }
                 SettingsDivider()
@@ -242,6 +276,53 @@ internal fun SettingsScreen(container: AuthenticatedAppDependencies) {
                                 right = FocusRequester.Cancel
                             }
                             .focusRequester(clearCacheFocus),
+                    )
+                }
+                SettingsDivider()
+                Row(
+                    Modifier.fillMaxWidth().height(80.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "歌曲磁盘缓存",
+                        color = FnColors.Muted,
+                        fontSize = 12.sp,
+                        modifier = Modifier.width(144.dp),
+                    )
+                    Column(verticalArrangement = Arrangement.Center) {
+                        Text(
+                            "当前 ${formatBytes(songCacheBytes)}",
+                            color = FnColors.Muted,
+                            fontSize = 11.sp,
+                            lineHeight = 14.sp,
+                        )
+                        Text(
+                            "已播放歌曲的本地缓存",
+                            color = FnColors.Muted.copy(alpha = 0.7f),
+                            fontSize = 10.sp,
+                            lineHeight = 12.sp,
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    SettingsActionButton(
+                        label = "清除歌曲缓存",
+                        onClick = {
+                            container.playbackController.clearSongCache()
+                            scope.launch { refreshSongCacheUsage() }
+                        },
+                        modifier = Modifier
+                            .width(166.dp)
+                            .focusProperties {
+                                up = clearCacheFocus
+                                down = if (container.updateController.enabled) {
+                                    updateFocus
+                                } else {
+                                    FocusRequester.Cancel
+                                }
+                                left = FocusRequester.Cancel
+                                right = FocusRequester.Cancel
+                            }
+                            .focusRequester(songCacheClearFocus),
                     )
                 }
             }
@@ -452,8 +533,8 @@ internal fun SettingsCheckbox(
     var focused by remember { mutableStateOf(false) }
     Row(
         modifier = modifier
-            .width(166.dp)
-            .height(34.dp)
+            .width(320.dp)
+            .height(44.dp)
             .onFocusChanged { focused = it.isFocused }
             .background(SettingsControl, RoundedCornerShape(5.dp))
             .border(
@@ -461,6 +542,16 @@ internal fun SettingsCheckbox(
                 if (focused) FnColors.Coral else Color(0xFF454B4D),
                 RoundedCornerShape(5.dp),
             )
+            .focusable()
+            .onPreviewKeyEvent { event ->
+                // 遥控器确定键（DPAD_CENTER / Enter）也能切换复选框。
+                if (event.key == Key.Enter || event.key == Key.DirectionCenter) {
+                    if (event.type == KeyEventType.KeyUp) onClick()
+                    true
+                } else {
+                    false
+                }
+            }
             .toggleable(
                 value = selected,
                 role = Role.Checkbox,
@@ -482,7 +573,14 @@ internal fun SettingsCheckbox(
                 Text("✓", color = Color(0xFF17201E), fontSize = 12.sp, lineHeight = 12.sp, fontWeight = FontWeight.Bold)
             }
         }
-        Text(label, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        Text(
+            label,
+            fontSize = 12.sp,
+            lineHeight = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

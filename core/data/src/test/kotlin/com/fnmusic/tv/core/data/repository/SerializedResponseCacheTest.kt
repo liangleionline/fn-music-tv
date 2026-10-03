@@ -174,6 +174,36 @@ class SerializedResponseCacheTest {
         assertEquals("fresh", cache.getOrFetch(key) { error("fresh value should be retained") })
     }
 
+    @Test fun `force refresh bypasses retained value, refetches and re-persists`() = runBlocking {
+        val cache = SerializedResponseCache(1024, scope)
+        val key = ResponseCacheKey("server:user", "index", "playlists")
+        val calls = AtomicInteger()
+        val persisted = AtomicInteger()
+
+        assertEquals(
+            "v1",
+            cache.getOrFetch(key, persist = { persisted.incrementAndGet() }) {
+                calls.incrementAndGet()
+                "v1"
+            },
+        )
+
+        // mirrors cachedIndex(forceRefresh = true): isRetainedValid 恒为 false。
+        val refreshed = cache.getOrFetch(
+            key = key,
+            isRetainedValid = { false },
+            persist = { persisted.incrementAndGet() },
+        ) {
+            calls.incrementAndGet()
+            "v2"
+        }
+
+        assertEquals("v2", refreshed)
+        assertEquals(2, calls.get())
+        assertEquals(2, persisted.get())
+        assertEquals("v2", cache.getOrFetch(key) { error("refreshed value should be retained") })
+    }
+
     @Test fun `namespace invalidation rejects a late non cancellable result`() = runBlocking {
         val cache = SerializedResponseCache(1024, scope)
         val key = ResponseCacheKey("old", "index", "playlists")
