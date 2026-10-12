@@ -65,6 +65,9 @@ private const val ARTWORK_VALIDATION_LONG_EDGE = 128
 
 private const val SEARCH_PAGE_SIZE = 200
 
+/** 搜索单类目最大扫描页数（200 条/页，最多 10 万条），纯属防御性上限，防止异常服务端导致死循环。 */
+private const val SEARCH_MAX_PAGES = 500
+
 /** 客户端本地搜索结果，按歌单 / 歌手 / 专辑 / 歌曲分类。 */
 data class SearchResults(
     val tracks: List<Track> = emptyList(),
@@ -74,14 +77,6 @@ data class SearchResults(
 ) {
     val isEmpty: Boolean get() = tracks.isEmpty() && artists.isEmpty() && playlists.isEmpty() && albums.isEmpty()
 }
-
-private class SearchCatalogIndex(
-    val key: String,
-    val playlists: List<Playlist>,
-    val artists: List<Artist>,
-    val albums: List<Album>,
-    val tracks: List<Track>,
-)
 
 /** 基于汉字拼音的搜索匹配器，支持中文子串、拼音全拼与拼音首字母。 */
 private class SearchMatcher(private val query: String) {
@@ -136,7 +131,11 @@ private class PinyinIndex(
     val initials: String,
 ) {
     companion object {
-        private val cache = java.util.concurrent.ConcurrentHashMap<String, PinyinIndex>()
+        // 拼音结果缓存，带容量上限（LRU），防止长时间使用内存无限增长
+        private val cache = object : LinkedHashMap<String, PinyinIndex>(4_096, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, PinyinIndex>): Boolean =
+                size > 30_000
+        }
 
         private val format: net.sourceforge.pinyin4j.format.HanyuPinyinOutputFormat by lazy {
             net.sourceforge.pinyin4j.format.HanyuPinyinOutputFormat().apply {
@@ -148,7 +147,9 @@ private class PinyinIndex(
 
         fun of(text: String): PinyinIndex {
             val lower = text.lowercase()
-            return cache.getOrPut(lower) { build(lower) }
+            synchronized(cache) {
+                return cache.getOrPut(lower) { build(lower) }
+            }
         }
 
         private fun build(lower: String): PinyinIndex {
@@ -316,8 +317,6 @@ class MusicRepository internal constructor(
         matcher = onlineLyricsMatcher,
     )
     private val favoriteMutationMutex = Mutex()
-    private val searchCatalogMutex = Mutex()
-    private var searchCatalogCache: SearchCatalogIndex? = null
     private val _favoriteState = MutableStateFlow(FavoriteLibraryState())
     val favoriteState: StateFlow<FavoriteLibraryState> = _favoriteState.asStateFlow()
     private val artworkCache = ArtworkCache(
@@ -589,8 +588,9 @@ class MusicRepository internal constructor(
     suspend fun applyArtworkBudget() = artworkCache.applyBudget()
 
     /**
-     * 客户端本地搜索：服务端 API 未提供搜索端点，故在本地建立完整曲库索引（拉取到分页总数为止，不截断），
-     * 再按关键词匹配。匹配规则（不区分大小写）：
+     * 客户端本地搜索：服务端 API 未提供搜索端点，采用“流式分页匹配”——逐页拉取并即时匹配，只保留命中项，
+     * 内存占用只与命中数量有关、与曲库总量无关，不会把全量曲库一次性载入内存，避免大曲库下内存暴涨导致崩溃。
+     * 匹配规则（不区分大小写）：
      *  1) 名称/标题直接包含关键词（支持中文、英文）；
      *  2) 关键词为中文时，也按其中文对应的拼音匹配（如“小虎”匹配“小虎队”的拼音 xiaohudui）；
      *  3) 关键词为拼音全拼（如 xiaohu）或拼音首字母（如 xhd）时，匹配中文名称的全拼/首字母。
@@ -599,17 +599,26 @@ class MusicRepository internal constructor(
     suspend fun search(query: String): SearchResults {
         val q = query.trim().lowercase()
         if (q.isEmpty()) return SearchResults()
-        // 全量索引拉取与拼音匹配都较耗时，放到后台线程执行，避免在主线程造成 ANR/卡顿；
-        // 任意单个异常都降级为空结果，绝不向上抛出导致崩溃。
         return try {
             withContext(Dispatchers.Default) {
-                val index = fullSearchIndex()
                 val matcher = SearchMatcher(q)
                 SearchResults(
-                    tracks = index.tracks.filter { matcher.matchesTrack(it) }.sortedWith(matcher.trackRank),
-                    artists = index.artists.filter { matcher.matchesArtist(it) }.sortedWith(matcher.artistRank),
-                    playlists = index.playlists.filter { matcher.matchesName(it.name) }.sortedWith(matcher.playlistRank),
-                    albums = index.albums.filter { matcher.matchesAlbum(it) }.sortedWith(matcher.albumRank),
+                    tracks = streamCatalog(
+                        pages = { page -> searchTracksPage(page) },
+                        idOf = { it.guid.value },
+                        matches = matcher::matchesTrack,
+                    ).sortedWith(matcher.trackRank),
+                    artists = streamCatalog(
+                        pages = { page -> artists(page, SEARCH_PAGE_SIZE) },
+                        idOf = { it.guid.value },
+                        matches = matcher::matchesArtist,
+                    ).sortedWith(matcher.artistRank),
+                    albums = streamCatalog(
+                        pages = { page -> albums(page, SEARCH_PAGE_SIZE) },
+                        idOf = { it.guid.value },
+                        matches = matcher::matchesAlbum,
+                    ).sortedWith(matcher.albumRank),
+                    playlists = playlists().filter { matcher.matchesName(it.name) }.sortedWith(matcher.playlistRank),
                 )
             }
         } catch (e: CancellationException) {
@@ -619,51 +628,34 @@ class MusicRepository internal constructor(
         }
     }
 
-    /** 全量曲库索引，按登录账号缓存：首次搜索时全量拉取，之后复用，直到账号切换。 */
-    private suspend fun fullSearchIndex(): SearchCatalogIndex {
-        val key = session.cacheNamespace()
-        searchCatalogMutex.withLock {
-            searchCatalogCache?.let { cached -> if (cached.key == key) return cached }
-            val index = coroutineScope {
-                val playlistsD = async { playlists() }
-                val artistsD = async {
-                    fetchAllPages { page -> session.authenticated { it.artists(page, SEARCH_PAGE_SIZE) } }
-                        .map(ArtistDto::toDomain)
-                }
-                val albumsD = async {
-                    fetchAllPages { page -> session.authenticated { it.albums(page, SEARCH_PAGE_SIZE) } }
-                        .map(AlbumDto::toDomain)
-                }
-                val tracksD = async {
-                    fetchAllPages { page -> session.authenticated { it.allTracks(page, SEARCH_PAGE_SIZE) } }
-                        .map(TrackDto::toDomain)
-                }
-                SearchCatalogIndex(
-                    key = key,
-                    playlists = playlistsD.await(),
-                    artists = artistsD.await(),
-                    albums = albumsD.await(),
-                    tracks = tracksD.await(),
-                )
-            }
-            searchCatalogCache = index
-            return index
-        }
-    }
+    /** 搜索专用歌曲分页（每页较大，减少请求次数），复用磁盘缓存，二次搜索直接命中缓存。 */
+    private suspend fun searchTracksPage(page: Int): Page<Track> = cachedPage<TrackDto, Track>(
+        sourceKey = "search-tracks",
+        page = page,
+        pageSize = SEARCH_PAGE_SIZE,
+        fetch = { session.authenticated { it.allTracks(page, SEARCH_PAGE_SIZE) } },
+    ) { it.toDomain() }.also(::observeFavoriteTracks)
 
-    private suspend fun <T> fetchAllPages(loader: suspend (Int) -> SortedPageListDto<T>): List<T> {
+    /** 流式扫描分页目录：逐页匹配、只保留命中项；到空页、页码重复（服务端分页未生效）或达到安全上限即停止。 */
+    private suspend fun <T> streamCatalog(
+        pages: suspend (Int) -> Page<T>,
+        idOf: (T) -> String,
+        matches: (T) -> Boolean,
+    ): List<T> {
         val out = ArrayList<T>()
         var page = 0
-        var fetched = 0
-        var total = Int.MAX_VALUE
-        while (fetched < total) {
-            val dto = loader(page)
-            if (dto.list.isEmpty()) break
-            total = dto.total
-            fetched += dto.list.size
-            out += dto.list
+        var prevFirstId: String? = null
+        while (page < SEARCH_MAX_PAGES) {
+            val result = pages(page)
+            val items = result.items
+            if (items.isEmpty()) break
+            val firstId = idOf(items.first())
+            if (page > 0 && firstId == prevFirstId) break
+            prevFirstId = firstId
+            for (item in items) {
+                if (matches(item)) out.add(item)
+            }
             page += 1
-            if (page > 10_000) break
         }
         return out
     }

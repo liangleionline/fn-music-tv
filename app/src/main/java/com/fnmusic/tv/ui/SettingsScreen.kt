@@ -41,6 +41,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -49,12 +50,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Border
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Text
 import com.fnmusic.tv.AuthenticatedAppDependencies
 import com.fnmusic.tv.BuildConfig
+import com.fnmusic.tv.CrashLogStore
 import com.fnmusic.tv.R
 import com.fnmusic.tv.core.model.PlayerStyle
 import com.fnmusic.tv.core.model.preferences.CacheBudget
@@ -82,8 +85,13 @@ internal fun SettingsScreen(container: AuthenticatedAppDependencies) {
     val clearCacheFocus = remember { FocusRequester() }
     val songCacheClearFocus = remember { FocusRequester() }
     val updateFocus = remember { FocusRequester() }
+    val crashLogFocus = remember { FocusRequester() }
+    val crashLogCloseFocus = remember { FocusRequester() }
     var usage by remember { mutableStateOf(CacheUsage(artworkBytes = 0, indexBytes = 0)) }
     var songCacheBytes by remember { mutableStateOf(0L) }
+    var showCrashLog by remember { mutableStateOf(false) }
+    var crashLogText by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
 
     suspend fun refreshUsage() {
         usage = container.musicRepository.cacheUsage()
@@ -97,6 +105,7 @@ internal fun SettingsScreen(container: AuthenticatedAppDependencies) {
         container.musicRepository.applyArtworkBudget()
         refreshUsage()
         refreshSongCacheUsage()
+        crashLogText = CrashLogStore.read(context.applicationContext)
     }
     LaunchedEffect(Unit) {
         yield()
@@ -317,7 +326,7 @@ internal fun SettingsScreen(container: AuthenticatedAppDependencies) {
                                 down = if (container.updateController.enabled) {
                                     updateFocus
                                 } else {
-                                    FocusRequester.Cancel
+                                    crashLogFocus
                                 }
                                 left = FocusRequester.Cancel
                                 right = FocusRequester.Cancel
@@ -389,12 +398,101 @@ internal fun SettingsScreen(container: AuthenticatedAppDependencies) {
                                 .height(36.dp)
                                 .focusProperties {
                                     up = clearCacheFocus
-                                    down = FocusRequester.Cancel
+                                    down = crashLogFocus
                                     left = FocusRequester.Cancel
                                     right = FocusRequester.Cancel
                                 }
                                 .focusRequester(updateFocus),
                         )
+                    }
+                }
+
+                Spacer(Modifier.height(14.dp))
+                Text("诊断", fontSize = 16.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(64.dp)
+                        .background(SettingsPanel, RoundedCornerShape(9.dp))
+                        .border(0.75.dp, SettingsBorderColor, RoundedCornerShape(9.dp))
+                        .padding(horizontal = 22.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("崩溃日志", color = FnColors.Muted, fontSize = 12.sp, lineHeight = 14.sp)
+                        Text(
+                            when {
+                                crashLogText == null -> "暂无崩溃记录，崩溃后再次进入可在此查看"
+                                else -> crashLogText!!.lineSequence().firstOrNull().orEmpty().take(46)
+                            },
+                            color = FnColors.Muted.copy(alpha = 0.7f),
+                            fontSize = 10.sp,
+                            lineHeight = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    SettingsActionButton(
+                        label = "查看崩溃日志",
+                        onClick = {
+                            crashLogText = CrashLogStore.read(context.applicationContext)
+                            showCrashLog = true
+                        },
+                        modifier = Modifier
+                            .width(150.dp)
+                            .focusProperties {
+                                up = if (container.updateController.enabled) updateFocus else songCacheClearFocus
+                                down = FocusRequester.Cancel
+                                left = FocusRequester.Cancel
+                                right = FocusRequester.Cancel
+                            }
+                            .focusRequester(crashLogFocus),
+                    )
+                }
+
+                if (showCrashLog) {
+                    Dialog(onDismissRequest = { showCrashLog = false }) {
+                        Box(
+                            Modifier
+                                .width(860.dp)
+                                .height(560.dp)
+                                .background(Color(0xFF121516), RoundedCornerShape(14.dp))
+                                .border(1.dp, FnColors.Coral.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+                                .padding(24.dp),
+                        ) {
+                            Column(Modifier.fillMaxSize()) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        "崩溃日志",
+                                        fontSize = 20.sp,
+                                        lineHeight = 24.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    SettingsActionButton(
+                                        label = "关闭",
+                                        onClick = { showCrashLog = false },
+                                        modifier = Modifier
+                                            .width(100.dp)
+                                            .focusRequester(crashLogCloseFocus),
+                                    )
+                                }
+                                Spacer(Modifier.height(12.dp))
+                                Text(
+                                    text = crashLogText ?: "暂无崩溃日志记录",
+                                    color = Color(0xFFB9C2C0),
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .verticalScroll(rememberScrollState()),
+                                )
+                            }
+                        }
+                    }
+                    LaunchedEffect(Unit) {
+                        crashLogCloseFocus.requestFocus()
                     }
                 }
             }

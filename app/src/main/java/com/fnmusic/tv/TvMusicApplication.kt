@@ -16,6 +16,7 @@ class TvMusicApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        CrashLogStore.install(this)
         container.startPlaybackRuntime()
     }
 }
