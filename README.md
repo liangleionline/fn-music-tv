@@ -1,105 +1,120 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" width="108" height="108" alt="回声台 Logo">
+  <img src="docs/assets/logo.svg" width="108" height="108" alt="飞牛音乐 TV 增强版 Logo">
 </p>
 
-<h1 align="center">回声台</h1>
+<h1 align="center">飞牛音乐 TV 增强版</h1>
 
-<p align="center">面向 Android TV 与 Android 投影设备，也可侧载至普通安卓车机的飞牛音乐第三方客户端</p>
+<p align="center">面向 Android TV 与电视盒子的飞牛音乐第三方客户端 · 基于「回声台」二次开发</p>
 
-项目使用 Kotlin、Compose for TV 与 Media3 构建，针对电视大屏、横屏布局、遥控器和
-触屏操作进行了适配。
-
-> 本项目为第三方客户端，与飞牛官方无关。使用前请确保已经部署可访问的飞牛音乐服务，
-> 并遵守相关服务条款。
-
-## 主要功能
-
-- **电视端原生体验**：适配 Android TV 启动器、横屏显示与 D-pad 遥控器焦点操作。
-- **触屏操作**：支持点击导航、卡片和播放控件，也可直接滑动首页、音乐库、列表与设置页面。
-- **音乐库浏览**：支持歌单、歌手、专辑和全部歌曲浏览，可进入详情页播放完整列表。
-- **随机漫游**：从音乐库持续发现歌曲，并支持上一首、下一首和退出漫游。
-- **完整播放队列**：支持列表循环、随机播放、单曲循环与顺序播放。
-- **沉浸式播放器**：提供 CD 模式和大海报模式，可在设置中随时切换。
-- **歌词显示**：默认在线匹配高置信度的原文与译文，命中结果会缓存；匹配不到或在线源异常时自动使用飞牛歌词，也可在设置中关闭在线匹配。
-- **灵活连接 NAS**：支持 HTTP、HTTPS、FNID 自动选路、访问码验证、断网恢复和多服务器、多账号登录历史。
-- **本地缓存**：缓存封面与音乐库资料，可设置图片缓存上限并手动清理。
-
-## 界面预览
-
-| 首页 | 我的音乐 |
-| --- | --- |
-| ![首页](docs/images/hub.png) | ![我的音乐](docs/images/me.png) |
-
-| 歌手歌曲 | 歌手歌专辑 |
-| --- | --- |
-| ![歌手歌曲](docs/images/artist.png) | ![歌手专辑](docs/images/album.png) |
-
-| 播放控制 | CD 播放器 |
-| --- | --- |
-| ![播放控制](docs/images/full-screen-play-bar.png) | ![CD 播放器](docs/images/full-screen-cd.png) |
-
-<p align="center"><strong>大海报播放器</strong></p>
 <p align="center">
-  <img src="docs/images/full-screen-play.png" alt="大海报播放器">
+  <a href="https://github.com/liangleionline/fn-music-tv/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/liangleionline/fn-music-tv"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/liangleionline/fn-music-tv"></a>
 </p>
 
-## 爱发电
+---
 
-<a href="https://afdian.com/a/qiaoke" target="_blank">
-  <img src="docs/images/support_aifadian.svg" alt="support_aifadian">
-</a>
+## 项目来源
 
-如果这个项目对你有所帮助，欢迎留下 Star 或通过爱发电支持项目。您的每一份认可，都会成为我持续完善体验的动力。
+本仓库是开源项目 **回声台**（[QiaoKes/fn-music-tv](https://github.com/QiaoKes/fn-music-tv)）的**二次开发分支（fork）**。
 
-## 安装
+- 原项目由 [QiaoKes](https://github.com/QiaoKes) 开发维护，使用 Kotlin、Compose for TV 与 Media3 构建，是针对电视大屏、横屏布局、遥控器和触屏操作做了专门适配的飞牛音乐第三方 Android TV 客户端。
+- 本分支以原作者 **v1.1.2** 代码为基线，围绕**电视端搜索、歌单管理、播放体验与可维护性**做了一系列增强与修复，并将 **v1.1.3** 作为本分支的第一个独立发布版本。
+- 与原项目相同，本项目也是**第三方客户端，与飞牛官方无关**。使用前请确保已部署可访问的飞牛音乐服务，并遵守相关服务条款。
 
-### 下载预编译版本
+> 感谢原作者 QiaoKes 的出色工作。如果本增强版对你有帮助，也欢迎回到原仓库给原作者一个 Star。
 
-前往 [Releases](https://github.com/QiaoKes/fn-music-tv/releases) 下载最新版通用 APK：
+## 本分支做了什么（变更记录）
 
-```text
-fn-music-tv-<version>-universal.apk
-```
+### v1.1.3
 
-通用包包含 `arm64-v8a`、`armeabi-v7a`、`x86` 与 `x86_64`，支持 Android 6.0 及以上
-系统。下载后可通过 U 盘、文件管理器或 ADB 安装：
+- **搜索功能重构**：此前加入的客户端本地搜索曾采用「一次性将整个曲库载入内存」的做法，在大曲库下会导致搜索卡顿、约一分钟后崩溃、且搜不到目标结果。现已改为**流式分页匹配**：逐页拉取、即时匹配、只保留命中项，内存占用与曲库规模无关；同时加入空页 / 重复页 / 扫描上限三重保护，彻底规避内存暴涨与死循环。
+- **查看崩溃日志**：设置页新增「崩溃日志」入口，崩溃后重新进入 App 即可查看最近一次崩溃的完整堆栈（含崩溃时间与线程）；Android 11+ 还会附带系统记录的进程退出原因（ANR / 原生崩溃 / 内存不足被终止等），便于反馈与排查。
+- 版本号提升至 **1.1.3**（VERSION_CODE 28）。
 
-```sh
-adb install fn-music-tv-<version>-universal.apk
-```
+### v1.1.2 增强（相对原版新增）
 
-若系统拦截安装，请在设备设置中允许当前文件管理器或安装工具“安装未知应用”。
+| 模块 | 变更内容 |
+| --- | --- |
+| 首页 | 新增歌单模块：展示排序前三的用户歌单 + 「全部歌单」入口 |
+| 全部歌单页 | 长按遥控器确认键进入排序模式，用左右键调整歌单顺序，排序结果实时反映到首页 |
+| 启动同步 | 打开 App 时在后台自动刷新歌单信息，保证歌单缓存始终最新 |
+| 我的页 | 新增「同步歌单」入口，一键拉取并更新登录用户的最新自建歌单 |
+| 搜索 | 新增本地搜索，覆盖歌曲 / 歌手 / 歌单 / 专辑，支持中文、英文、拼音全拼与拼音首字母 |
+| 设置 | 新增歌曲缓存占用显示与一键清空；新增「按返回键退出时是否在后台继续播放」开关 |
+| 登录 | 登录成功自动保存服务器、账号与密码摘要，下次可从登录历史选择并自动填充；修复 HTTPS 开关无法用遥控器点击的问题 |
+| 修复 | 歌单歌曲数显示为 0、同步歌单无法聚焦、全部歌单长按排序无响应、播放行为文字显示不全等问题 |
 
-### 首次登录
+## 功能特性
 
-登录页中的“NAS 地址或 FNID”支持以下填写方式：
+- **电视端原生体验**：适配 Android TV 启动器、横屏显示与 D-pad 遥控器焦点操作，同时支持触屏点击与滑动浏览。
+- **音乐库浏览**：支持歌单、歌手、专辑与全部歌曲浏览，可进入详情页播放完整列表；随机漫游可持续发现歌曲。
+- **完整播放队列**：支持列表循环、随机播放、单曲循环与顺序播放。
+- **沉浸式播放器**：提供 CD 模式与大海报模式，可在设置中随时切换。
+- **歌词显示**：默认在线匹配高置信度的原文与译文并缓存；匹配不到或在线源异常时自动使用飞牛歌词。
+- **灵活连接 NAS**：支持 HTTP、HTTPS、FNID 自动选路、访问码验证、断网恢复与多服务器、多账号登录历史。
+- **本地缓存**：缓存封面与音乐库资料，可设置图片缓存上限、查看占用空间并一键清空。
+- **歌单管理增强**（本分支）：首页歌单模块、全部歌单长按排序、我的页同步自建歌单。
+- **本地搜索**（本分支）：中文 / 英文 / 拼音全拼 / 拼音首字母，覆盖歌曲、歌手、歌单、专辑。
+- **崩溃日志**（本分支）：设置页一键查看最近崩溃堆栈与系统进程退出原因。
+
+## 下载与安装
+
+前往本仓库 [Releases](https://github.com/liangleionline/fn-music-tv/releases) 下载最新版 APK（如 `fn-music-tv-1.1.3.apk`）。
+
+- 支持 **Android 6.0（API 23）及以上**的电视、盒子与投影设备；通用包包含 `arm64-v8a`、`armeabi-v7a`、`x86` 与 `x86_64` 四种架构。
+- 可通过 U 盘、文件管理器或 ADB 安装：
+
+  ```sh
+  adb install fn-music-tv-1.1.3.apk
+  ```
+
+- 若系统拦截安装，请在设备设置中允许当前文件管理器或安装工具「安装未知应用」。
+- **升级说明**：本分支各版本使用**同一签名**，可互相覆盖安装、数据不丢；但与原作者（QiaoKes）的官方包**签名不同**。若设备上已安装原版，请**先卸载原版**再安装本版（原版数据不会保留）。
+
+## 首次登录
+
+登录页「NAS 地址或 FNID」支持以下填写方式：
 
 | 连接方式 | 填写示例 | HTTPS 开关 |
 | --- | --- | --- |
 | 局域网 HTTP | `192.168.1.10:5666` | 关闭 |
 | HTTPS 域名 | `nas.example.com` | 打开 |
-| 完整 URL | `http://nas.example.com:5666` 或 `https://nas.example.com` | 会根据 URL 自动切换 |
-| FNID | `yourfnid` | 无需设置，应用会自动探测直连与中继 |
+| 完整 URL | `http://nas.example.com:5666` 或 `https://nas.example.com` | 自动识别 |
+| FNID | `yourfnid` | 无需设置，自动探测直连与中继 |
 
-1. 填写 NAS 地址、域名或 FNID。使用自定义端口时，请把端口一并写入地址。
+登录步骤：
+
+1. 填写 NAS 地址、域名或 FNID（使用自定义端口时请一并写入地址）。
 2. 输入飞牛音乐账号和密码。
-3. 如果飞牛 NAS 开启了外网访问码，请在“安全码”中填写该访问码；未启用时留空。
-4. 需要下次自动恢复会话时，保留“保持登录”。
-5. 选择“登录”，应用会验证访问码和账号，并连接到飞牛音乐服务。
+3. 若 NAS 开启了外网访问码，请在「安全码」中填写；未启用时留空。
+4. 需要下次自动恢复会话时勾选「保持登录」。
+5. 选择「登录」，应用会验证访问码和账号并连接飞牛音乐服务。
 
-开启“保持登录”后，应用会在系统安全存储中加密保存服务器、账号、密码的 SHA-256 摘要、
-安全码和登录 token，不会保存明文密码。历史记录按服务器和账号区分；选择历史账号会直接
-登录，行尾可删除单条记录，底部可清除全部记录。
+开启「保持登录」后，应用会在系统安全存储中加密保存服务器、账号、密码摘要、安全码与登录 token（不保存明文密码）。历史记录按服务器与账号区分，选择历史账号可直接登录，行尾可删除单条记录，底部可清除全部记录；**本分支支持从登录历史中选择并自动填充服务器、账号与密码**。
 
-投影仪开机时如果网络尚未就绪，应用会保留登录资料并自动重试，不需要退出应用再进入；
-恢复页也可以立即重试或切换到其他账号。
+## 搜索使用说明（本分支新增）
 
-直接填写 `https://` 或 `http://` 前缀时，应用会自动识别协议。仅填写域名或 IP 时，
-由 HTTPS 开关决定协议。使用 FNID 时不需要勾选 HTTPS，应用会按局域网地址、外网地址和
-飞牛中继的顺序探测可用连接。
+搜索支持中文、英文、**拼音全拼**与**拼音首字母**，均不区分大小写：
 
-访问码不是飞牛账号密码。只有 NAS 开启了访问码保护时才需要填写；如果提示“需要安全码”
-或“安全码错误”，请检查飞牛 NAS 中配置的访问码。
+| 输入 | 期望结果示例 |
+| --- | --- |
+| `小虎` | 小虎队（中文子串） |
+| `xhd` | 小虎队（拼音首字母） |
+| `xiaohu` | 小虎队（拼音全拼） |
+| `wf` | 王菲（拼音首字母） |
+| `eyes` | Eyes on Me（英文标题子串） |
+
+搜索结果按「歌曲 / 歌手 / 歌单 / 专辑」分类展示，点击歌曲即可直接播放。
+
+## 查看崩溃日志（本分支新增）
+
+若 App 发生崩溃，重新打开 App 后按以下路径查看：
+
+```
+设置 → 崩溃日志 → 查看
+```
+
+弹窗会显示最近一次崩溃的完整堆栈（含崩溃时间与线程）。Android 11+ 还会附加系统记录的最近进程退出原因（ANR、原生崩溃、内存不足被终止等）。如需协助排查，把弹窗内容拍照发回即可。
 
 ## 遥控器与触屏操作
 
@@ -109,75 +124,41 @@ adb install fn-music-tv-<version>-universal.apk
 | 确认键 | 打开页面、播放歌曲或执行当前操作 |
 | 返回键 | 返回上一级；首页连续按两次退出应用 |
 
-播放页面的控制栏会自动隐藏。按方向键或确认键可再次显示控制项；首页左上角的当前播放入口
-可快速返回播放器。
-
-触屏设备可以直接点击导航、歌曲卡片和播放器按钮，并通过横向或纵向滑动浏览内容。滑动列表时
-不会误触发卡片点击；遥控器焦点与 D-pad 操作保持不变。
+播放页面的控制栏会自动隐藏，按方向键或确认键可再次显示。触屏设备可直接点击导航、歌曲卡片与播放器按钮，并通过横向或纵向滑动浏览内容。
 
 ## 从源码构建
 
-环境要求：
-
-- JDK 21
-- Android SDK 36
-- Android SDK Platform Tools
-
-克隆项目并构建侧载调试包：
+环境要求：JDK 21、Android SDK 36、Android SDK Platform Tools。
 
 ```sh
-git clone https://github.com/QiaoKes/fn-music-tv.git
+git clone https://github.com/liangleionline/fn-music-tv.git
 cd fn-music-tv
 ./gradlew :app:assembleSideloadDebug
 ```
 
-产物位于：
-
-```text
-app/build/outputs/apk/sideload/debug/
-```
-
-执行完整的本地质量检查：
-
-```sh
-./gradlew \
-  :core:model:test \
-  :core:data:testDebugUnitTest \
-  :core:playback:testDebugUnitTest \
-  :app:testSideloadDebugUnitTest \
-  :app:lintSideloadDebug \
-  :app:lintStoreDebug
-```
+调试产物位于 `app/build/outputs/apk/sideload/debug/`。发布版（sideloadRelease）需要使用私有签名密钥，请在本地自行配置后构建。
 
 ## 项目结构
 
 ```text
-app/            Android TV 应用、Compose 界面与应用集成
-core/model/     音乐库、队列、播放模式等领域模型
-core/data/      服务端 API、会话、本地数据库与缓存
-core/lyrics/    在线歌词源、候选评分、歌词解析与匹配编排
-core/playback/  Media3 播放服务与队列
+app/             Android TV 应用、Compose 界面与应用集成
+core/model/      音乐库、队列、播放模式等领域模型
+core/data/       服务端 API、会话、本地数据库与缓存
+core/lyrics/     在线歌词源、候选评分、歌词解析与匹配编排
+core/playback/   Media3 播放服务与队列
 baselineprofile/ 基准配置生成模块
 ```
 
-## 兼容性说明
+## 第三方组件致谢
 
-- 通用侧载包可安装在 Android 6.0 及以上的普通安卓车机，使用横屏触控界面运行；当前尚未在
-  具体车机上实测，低分辨率屏幕、方向盘按键和车机音频策略可能因设备而异。
-- 车机侧载运行不等同于 Android Auto、CarPlay 或经过车厂认证的 Android Automotive 应用；
-  Android Automotive OS 是否允许安装和启动普通 APK 取决于车厂系统限制。请勿在驾驶过程中操作。
-- 当前客户端不会猜测尚未通过真实 NAS 验证的 CUE/HLS 转码参数；服务端参数未确认时，
-  对应歌曲会提示兼容播放暂不可用。
-- 不同电视和投影设备对 Android TV feature、音频编码及后台限制的实现可能不同，目前只在vidda c3 pro 与 google 盒子上通过测试
-
-## 特别感谢
-
-- [Accompanist Lyrics Core](https://github.com/6xingyv/Accompanist-Lyrics) 提供 YRC、KRC 等同步歌词格式的解析与统一歌词模型。
-- [Accompanist Lyrics UI](https://github.com/6xingyv/Accompanist) 提供逐字高亮、双语展示与自动滚动歌词组件。
-- [LDDC](https://github.com/chenmozhijin/LDDC) 提供了多歌词源检索、匹配策略与歌词格式处理方面的实现参考。
-- AndroidX、Compose for TV 与 Media3 等开源项目为本项目提供了基础能力。
+- [Accompanist Lyrics Core](https://github.com/6xingyv/Accompanist-Lyrics)：YRC、KRC 等同步歌词格式的解析与统一歌词模型。
+- [Accompanist Lyrics UI](https://github.com/6xingyv/Accompanist)：逐字高亮、双语展示与自动滚动歌词组件。
+- [LDDC](https://github.com/chenmozhijin/LDDC)：多歌词源检索、匹配策略与歌词格式处理的实现参考。
+- [pinyin4j](https://sourceforge.net/projects/pinyin4j/)：汉字转拼音，支撑拼音搜索（本分支引入）。
+- AndroidX、Compose for TV、Media3 等开源项目为本项目提供了基础能力。
 
 ## 开源许可
 
-本项目采用 [GNU General Public License v3.0](LICENSE) 开源。你可以在 GPL-3.0 条款下
-使用、修改和分发本项目；分发修改版本时也需要以 GPL-3.0 开源并提供相应源代码。
+本项目沿用原项目采用的 **GNU General Public License v3.0**（[LICENSE](LICENSE)）。
+
+GPL-3.0 是 copyleft 协议：你可以使用、修改与分发本项目，但**分发修改版本时必须同样以 GPL-3.0 开源，并提供对应的源代码**。本分支的所有修改同样以 GPL-3.0 开放，任何再分发都应保留原作者与本分支的版权说明。
