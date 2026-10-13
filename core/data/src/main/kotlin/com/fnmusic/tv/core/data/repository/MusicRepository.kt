@@ -317,6 +317,10 @@ class MusicRepository internal constructor(
         matcher = onlineLyricsMatcher,
     )
     private val favoriteMutationMutex = Mutex()
+    private val searchIndexMutex = Mutex()
+    /** 全量歌手/专辑搜索索引，按登录账号缓存；登录后由 warmSearchIndex() 后台预热，搜索时按需补齐。 */
+    private var searchArtists: Pair<String, List<Artist>>? = null
+    private var searchAlbums: Pair<String, List<Album>>? = null
     private val _favoriteState = MutableStateFlow(FavoriteLibraryState())
     val favoriteState: StateFlow<FavoriteLibraryState> = _favoriteState.asStateFlow()
     private val artworkCache = ArtworkCache(
@@ -588,8 +592,10 @@ class MusicRepository internal constructor(
     suspend fun applyArtworkBudget() = artworkCache.applyBudget()
 
     /**
-     * 客户端本地搜索：服务端 API 未提供搜索端点，采用“流式分页匹配”——逐页拉取并即时匹配，只保留命中项，
-     * 内存占用只与命中数量有关、与曲库总量无关，不会把全量曲库一次性载入内存，避免大曲库下内存暴涨导致崩溃。
+     * 客户端本地搜索：服务端 API 未提供搜索端点。
+     * 歌手、专辑、歌单数量少，登录后后台建立全量内存索引（warmSearchIndex），搜索时直接过滤，保证完整覆盖；
+     * 歌曲数量大，采用“流式分页匹配”——逐页拉取并即时匹配、只保留命中项，内存占用只与命中数量有关，
+     * 不会把全量曲库一次性载入内存，避免大曲库下内存暴涨导致崩溃。
      * 匹配规则（不区分大小写）：
      *  1) 名称/标题直接包含关键词（支持中文、英文）；
      *  2) 关键词为中文时，也按其中文对应的拼音匹配（如“小虎”匹配“小虎队”的拼音 xiaohudui）；
@@ -601,23 +607,18 @@ class MusicRepository internal constructor(
         if (q.isEmpty()) return SearchResults()
         return try {
             withContext(Dispatchers.Default) {
+                ensureSearchIndex()
                 val matcher = SearchMatcher(q)
+                val artists = searchArtists ?: ("" to emptyList())
+                val albums = searchAlbums ?: ("" to emptyList())
                 SearchResults(
                     tracks = streamCatalog(
                         pages = { page -> searchTracksPage(page) },
                         idOf = { it.guid.value },
                         matches = matcher::matchesTrack,
                     ).sortedWith(matcher.trackRank),
-                    artists = streamCatalog(
-                        pages = { page -> artists(page, SEARCH_PAGE_SIZE) },
-                        idOf = { it.guid.value },
-                        matches = matcher::matchesArtist,
-                    ).sortedWith(matcher.artistRank),
-                    albums = streamCatalog(
-                        pages = { page -> albums(page, SEARCH_PAGE_SIZE) },
-                        idOf = { it.guid.value },
-                        matches = matcher::matchesAlbum,
-                    ).sortedWith(matcher.albumRank),
+                    artists = artists.second.filter { matcher.matchesArtist(it) }.sortedWith(matcher.artistRank),
+                    albums = albums.second.filter { matcher.matchesAlbum(it) }.sortedWith(matcher.albumRank),
                     playlists = playlists().filter { matcher.matchesName(it.name) }.sortedWith(matcher.playlistRank),
                 )
             }
@@ -625,6 +626,28 @@ class MusicRepository internal constructor(
             throw e
         } catch (t: Throwable) {
             SearchResults()
+        }
+    }
+
+    /** 登录后后台预热搜索索引（歌手、专辑全量载入内存），幂等；账号切换时自动重建。 */
+    suspend fun warmSearchIndex() {
+        withContext(Dispatchers.Default) { ensureSearchIndex() }
+    }
+
+    private suspend fun ensureSearchIndex() {
+        val namespace = session.cacheNamespace()
+        searchIndexMutex.withLock {
+            if (searchArtists?.first == namespace && searchAlbums?.first == namespace) return
+            searchArtists = namespace to streamCatalog(
+                pages = { page -> artists(page, SEARCH_PAGE_SIZE) },
+                idOf = { it.guid.value },
+                matches = { true },
+            )
+            searchAlbums = namespace to streamCatalog(
+                pages = { page -> albums(page, SEARCH_PAGE_SIZE) },
+                idOf = { it.guid.value },
+                matches = { true },
+            )
         }
     }
 
@@ -636,25 +659,36 @@ class MusicRepository internal constructor(
         fetch = { session.authenticated { it.allTracks(page, SEARCH_PAGE_SIZE) } },
     ) { it.toDomain() }.also(::observeFavoriteTracks)
 
-    /** 流式扫描分页目录：逐页匹配、只保留命中项；到空页、页码重复（服务端分页未生效）或达到安全上限即停止。 */
+    /**
+     * 流式扫描分页目录：逐页拉取、即时匹配、只保留命中项，内存占用只与命中数量有关。
+     * 终止条件：拉取量达到服务端 total、遇到空页、整页均为已见重复项（服务端分页未前进）或超过安全上限。
+     * 注意：不能用“相邻页首元素相同即停”这类启发式，正常分页服务在特定排序下也会命中该情况，导致只扫第一页。
+     */
     private suspend fun <T> streamCatalog(
         pages: suspend (Int) -> Page<T>,
         idOf: (T) -> String,
         matches: (T) -> Boolean,
     ): List<T> {
         val out = ArrayList<T>()
+        val seen = HashSet<String>()
         var page = 0
-        var prevFirstId: String? = null
-        while (page < SEARCH_MAX_PAGES) {
+        var fetched = 0
+        var total = Int.MAX_VALUE
+        while (page < SEARCH_MAX_PAGES && fetched < total) {
             val result = pages(page)
             val items = result.items
             if (items.isEmpty()) break
-            val firstId = idOf(items.first())
-            if (page > 0 && firstId == prevFirstId) break
-            prevFirstId = firstId
+            total = result.total
+            fetched += items.size
+            var newlySeen = 0
             for (item in items) {
-                if (matches(item)) out.add(item)
+                if (seen.add(idOf(item))) {
+                    newlySeen += 1
+                    if (matches(item)) out.add(item)
+                }
             }
+            // 整页都是重复项：服务端分页没有前进，停止扫描，避免无限循环
+            if (newlySeen == 0) break
             page += 1
         }
         return out

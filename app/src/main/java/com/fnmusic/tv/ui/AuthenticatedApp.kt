@@ -207,6 +207,10 @@ internal fun AuthenticatedApp(
             playlistResumeSynced = true
         }
     }
+    // 登录后后台预热搜索索引（歌手、专辑全量载入内存），保证搜索即时返回且覆盖完整；账号切换时自动重建
+    LaunchedEffect(session.user.guid) {
+        runCatching { container.musicRepository.warmSearchIndex() }
+    }
     LaunchedEffect(route) {
         container.updateController.setAutomaticPromptAllowed(route !is LibraryRoute.Player)
     }
@@ -4004,28 +4008,15 @@ private fun SearchField(
     focusRequester: FocusRequester,
     onFocusStateChange: (Boolean) -> Unit,
 ) {
-    var editing by remember { mutableStateOf(true) }
     var focused by remember { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
-    val imeVisible = WindowInsets.isImeVisible
-    var imeWasVisible by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(10.dp)
 
-    LaunchedEffect(editing) {
-        if (editing) {
-            delay(250)
-            runCatching { keyboard?.show() }
-        }
-    }
-    LaunchedEffect(editing, imeVisible) {
-        when {
-            !editing -> imeWasVisible = false
-            imeVisible -> imeWasVisible = true
-            imeWasVisible -> {
-                editing = false
-                imeWasVisible = false
-            }
-        }
+    // 进入搜索页即弹出键盘，焦点由 SearchScreen 的 LaunchedEffect 请求到输入框上，
+    // 用户无需再按一次确定键即可直接输入。
+    LaunchedEffect(Unit) {
+        delay(120)
+        runCatching { keyboard?.show() }
     }
 
     BasicTextField(
@@ -4038,15 +4029,13 @@ private fun SearchField(
             .onFocusChanged {
                 focused = it.isFocused
                 onFocusStateChange(it.isFocused)
-                if (!it.isFocused) editing = false
             }
             .onPreviewKeyEvent { event ->
                 val key = event.key
                 if (key == Key.Enter || key == Key.DirectionCenter) {
-                    when (event.type) {
-                        KeyEventType.KeyDown -> if (!editing) editing = true
-                        KeyEventType.KeyUp -> if (editing) onSubmit()
-                        else -> Unit
+                    if (event.type == KeyEventType.KeyUp) {
+                        keyboard?.hide()
+                        onSubmit()
                     }
                     return@onPreviewKeyEvent true
                 }
@@ -4055,15 +4044,17 @@ private fun SearchField(
             .background(if (focused) FnColors.FocusFill else Color(0xFF171B1D), shape)
             .border(1.dp, if (focused) FnColors.Coral else Color.White.copy(alpha = 0.12f), shape)
             .padding(horizontal = 18.dp, vertical = 12.dp),
-        readOnly = !editing,
         textStyle = TextStyle(fontSize = 19.sp, color = FnColors.Text),
         singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
+        keyboardActions = KeyboardActions(onSearch = {
+            keyboard?.hide()
+            onSubmit()
+        }),
         cursorBrush = SolidColor(FnColors.Coral),
         decorationBox = { innerTextField ->
             Box(contentAlignment = Alignment.CenterStart) {
-                if (value.isEmpty() && !editing) {
+                if (value.isEmpty()) {
                     Text("输入关键词，搜索歌曲、歌手、歌单、专辑", color = FnColors.Muted, fontSize = 17.sp)
                 }
                 innerTextField()
