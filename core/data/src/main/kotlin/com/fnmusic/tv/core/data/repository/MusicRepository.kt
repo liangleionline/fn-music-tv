@@ -93,12 +93,13 @@ private class SearchMatcher(private val query: String) {
     private val qPinyin = PinyinIndex.of(query).pinyinCompact
     private val qInitials = PinyinIndex.of(query).initials
 
-    fun matchesTrack(track: Track): Boolean =
-        matches(track.title) || matches(track.artistName.orEmpty()) || matches(track.albumName.orEmpty())
+    /** 歌曲只按歌名匹配：歌手命中进歌手区、专辑命中进专辑区，避免“歌手结果混进歌曲区”。 */
+    fun matchesTrack(track: Track): Boolean = matches(track.title)
 
     fun matchesArtist(artist: Artist): Boolean = matches(artist.name)
 
-    fun matchesAlbum(album: Album): Boolean = matches(album.name) || matches(album.artistName.orEmpty())
+    /** 专辑只按专辑名匹配（不匹配歌手名）。 */
+    fun matchesAlbum(album: Album): Boolean = matches(album.name)
 
     fun matchesName(name: String): Boolean = matches(name)
 
@@ -609,10 +610,10 @@ class MusicRepository internal constructor(
      * 歌曲数量大，采用“流式分页匹配”——逐页拉取并即时匹配、只保留命中项，内存占用只与命中数量有关。
      * 歌曲扫描带自适应回退：先用大分页（200 条/页）快速扫描；若服务端在该分页大小下分页异常（整页重复），
      * 自动改用与浏览页相同的小分页（50 条/页）重扫，保证覆盖完整。
-     * 匹配规则（不区分大小写）：
-     *  1) 名称/标题直接包含关键词（支持中文、英文）；
-     *  2) 关键词为中文时，也按其中文对应的拼音匹配（如“小虎”匹配“小虎队”的拼音 xiaohudui）；
-     *  3) 关键词为拼音全拼（如 xiaohu）或拼音首字母（如 xhd）时，匹配中文名称的全拼/首字母。
+     * 匹配规则（不区分大小写），且严格“哪一项命中进哪一项”：
+     *  1) 歌曲区只按歌名匹配（中文、英文、拼音全拼、拼音首字母）；
+     *  2) 歌手区只按歌手名匹配；专辑区只按专辑名匹配；歌单区只按歌单名匹配；
+     *  3) 搜歌手名（如 zzh）时歌手进歌手区，其歌曲/专辑不会混入歌曲区/专辑区。
      * 结果按“前缀优先、其次包含”排序。
      */
     suspend fun search(query: String): SearchResults {
