@@ -65,6 +65,9 @@ private const val ARTWORK_VALIDATION_LONG_EDGE = 128
 
 private const val SEARCH_PAGE_SIZE = 200
 
+/** 搜索索引使用的分页大小：与浏览页相同（浏览页已验证该大小下服务端分页正常、可完整拉取）。 */
+private const val SEARCH_INDEX_PAGE_SIZE = 50
+
 /** 搜索单类目最大扫描页数（200 条/页，最多 10 万条），纯属防御性上限，防止异常服务端导致死循环。 */
 private const val SEARCH_MAX_PAGES = 500
 
@@ -321,6 +324,9 @@ class MusicRepository internal constructor(
     /** 全量歌手/专辑搜索索引，按登录账号缓存；登录后由 warmSearchIndex() 后台预热，搜索时按需补齐。 */
     private var searchArtists: Pair<String, List<Artist>>? = null
     private var searchAlbums: Pair<String, List<Album>>? = null
+    /** 最近一次搜索的诊断信息（查询、索引规模、命中数、近似候选），用于排查“搜不到”；由 App 层写入崩溃日志文件。 */
+    @Volatile
+    private var lastSearchDiagnostics: String? = null
     private val _favoriteState = MutableStateFlow(FavoriteLibraryState())
     val favoriteState: StateFlow<FavoriteLibraryState> = _favoriteState.asStateFlow()
     private val artworkCache = ArtworkCache(
@@ -594,8 +600,9 @@ class MusicRepository internal constructor(
     /**
      * 客户端本地搜索：服务端 API 未提供搜索端点。
      * 歌手、专辑、歌单数量少，登录后后台建立全量内存索引（warmSearchIndex），搜索时直接过滤，保证完整覆盖；
-     * 歌曲数量大，采用“流式分页匹配”——逐页拉取并即时匹配、只保留命中项，内存占用只与命中数量有关，
-     * 不会把全量曲库一次性载入内存，避免大曲库下内存暴涨导致崩溃。
+     * 歌曲数量大，采用“流式分页匹配”——逐页拉取并即时匹配、只保留命中项，内存占用只与命中数量有关。
+     * 歌曲扫描带自适应回退：先用大分页（200 条/页）快速扫描；若服务端在该分页大小下分页异常（整页重复），
+     * 自动改用与浏览页相同的小分页（50 条/页）重扫，保证覆盖完整。
      * 匹配规则（不区分大小写）：
      *  1) 名称/标题直接包含关键词（支持中文、英文）；
      *  2) 关键词为中文时，也按其中文对应的拼音匹配（如“小虎”匹配“小虎队”的拼音 xiaohudui）；
@@ -609,17 +616,26 @@ class MusicRepository internal constructor(
             withContext(Dispatchers.Default) {
                 ensureSearchIndex()
                 val matcher = SearchMatcher(q)
-                val artists = searchArtists ?: ("" to emptyList())
-                val albums = searchAlbums ?: ("" to emptyList())
+                val artistIndex = searchArtists ?: ("" to emptyList())
+                val albumIndex = searchAlbums ?: ("" to emptyList())
+                val trackHits = scanTracks(matcher)
+                val artistHits = artistIndex.second.filter { matcher.matchesArtist(it) }
+                val albumHits = albumIndex.second.filter { matcher.matchesAlbum(it) }
+                val playlistHits = playlists().filter { matcher.matchesName(it.name) }
+                lastSearchDiagnostics = searchDiagnostics(
+                    q = q,
+                    artistIndex = artistIndex,
+                    albumIndex = albumIndex,
+                    trackHits = trackHits,
+                    artistHits = artistHits,
+                    albumHits = albumHits,
+                    playlistHits = playlistHits,
+                )
                 SearchResults(
-                    tracks = streamCatalog(
-                        pages = { page -> searchTracksPage(page) },
-                        idOf = { it.guid.value },
-                        matches = matcher::matchesTrack,
-                    ).sortedWith(matcher.trackRank),
-                    artists = artists.second.filter { matcher.matchesArtist(it) }.sortedWith(matcher.artistRank),
-                    albums = albums.second.filter { matcher.matchesAlbum(it) }.sortedWith(matcher.albumRank),
-                    playlists = playlists().filter { matcher.matchesName(it.name) }.sortedWith(matcher.playlistRank),
+                    tracks = trackHits.sortedWith(matcher.trackRank),
+                    artists = artistHits.sortedWith(matcher.artistRank),
+                    albums = albumHits.sortedWith(matcher.albumRank),
+                    playlists = playlistHits.sortedWith(matcher.playlistRank),
                 )
             }
         } catch (e: CancellationException) {
@@ -628,6 +644,9 @@ class MusicRepository internal constructor(
             SearchResults()
         }
     }
+
+    /** 最近一次搜索的诊断信息；供 App 层写入崩溃日志文件，方便反馈“为什么搜不到”。 */
+    fun lastSearchDiagnostics(): String? = lastSearchDiagnostics
 
     /** 登录后后台预热搜索索引（歌手、专辑全量载入内存），幂等；账号切换时自动重建。 */
     suspend fun warmSearchIndex() {
@@ -639,25 +658,43 @@ class MusicRepository internal constructor(
         searchIndexMutex.withLock {
             if (searchArtists?.first == namespace && searchAlbums?.first == namespace) return
             searchArtists = namespace to streamCatalog(
-                pages = { page -> artists(page, SEARCH_PAGE_SIZE) },
+                pages = { page -> artists(page, SEARCH_INDEX_PAGE_SIZE) },
                 idOf = { it.guid.value },
                 matches = { true },
-            )
+            ).items
             searchAlbums = namespace to streamCatalog(
-                pages = { page -> albums(page, SEARCH_PAGE_SIZE) },
+                pages = { page -> albums(page, SEARCH_INDEX_PAGE_SIZE) },
                 idOf = { it.guid.value },
                 matches = { true },
-            )
+            ).items
         }
     }
 
-    /** 搜索专用歌曲分页（每页较大，减少请求次数），复用磁盘缓存，二次搜索直接命中缓存。 */
-    private suspend fun searchTracksPage(page: Int): Page<Track> = cachedPage<TrackDto, Track>(
-        sourceKey = "search-tracks",
+    /** 歌曲搜索：先用大分页快速扫描，若服务端在该分页大小下分页异常，回退到浏览页验证过的 50 条/页重扫。 */
+    private suspend fun scanTracks(matcher: SearchMatcher): List<Track> {
+        val fast = streamCatalog(
+            pages = { page -> searchTracksPage(page, SEARCH_PAGE_SIZE) },
+            idOf = { it.guid.value },
+            matches = matcher::matchesTrack,
+        )
+        if (fast.complete) return fast.items
+        return streamCatalog(
+            pages = { page -> searchTracksPage(page, SEARCH_INDEX_PAGE_SIZE) },
+            idOf = { it.guid.value },
+            matches = matcher::matchesTrack,
+        ).items
+    }
+
+    /** 搜索专用歌曲分页；缓存键含分页大小，避免不同分页大小的缓存互相污染。 */
+    private suspend fun searchTracksPage(page: Int, size: Int): Page<Track> = cachedPage<TrackDto, Track>(
+        sourceKey = sizedPageSourceKey("search-tracks", size),
         page = page,
-        pageSize = SEARCH_PAGE_SIZE,
-        fetch = { session.authenticated { it.allTracks(page, SEARCH_PAGE_SIZE) } },
+        pageSize = size,
+        fetch = { session.authenticated { it.allTracks(page, size) } },
     ) { it.toDomain() }.also(::observeFavoriteTracks)
+
+    /** 流式扫描结果：items 为命中项；complete=false 表示因“整页重复（分页未前进）”提前结束，可回退重扫。 */
+    private data class CatalogScanResult<T>(val items: List<T>, val complete: Boolean)
 
     /**
      * 流式扫描分页目录：逐页拉取、即时匹配、只保留命中项，内存占用只与命中数量有关。
@@ -668,12 +705,13 @@ class MusicRepository internal constructor(
         pages: suspend (Int) -> Page<T>,
         idOf: (T) -> String,
         matches: (T) -> Boolean,
-    ): List<T> {
+    ): CatalogScanResult<T> {
         val out = ArrayList<T>()
         val seen = HashSet<String>()
         var page = 0
         var fetched = 0
         var total = Int.MAX_VALUE
+        var stuck = false
         while (page < SEARCH_MAX_PAGES && fetched < total) {
             val result = pages(page)
             val items = result.items
@@ -688,10 +726,43 @@ class MusicRepository internal constructor(
                 }
             }
             // 整页都是重复项：服务端分页没有前进，停止扫描，避免无限循环
-            if (newlySeen == 0) break
+            if (newlySeen == 0) {
+                stuck = true
+                break
+            }
             page += 1
         }
-        return out
+        return CatalogScanResult(out, complete = !stuck)
+    }
+
+    /** 生成搜索诊断文本：查询、索引规模、命中数，以及“可能想找”的近似歌手（首字母前缀接近）。 */
+    private fun searchDiagnostics(
+        q: String,
+        artistIndex: Pair<String, List<Artist>>,
+        albumIndex: Pair<String, List<Album>>,
+        trackHits: List<Track>,
+        artistHits: List<Artist>,
+        albumHits: List<Album>,
+        playlistHits: List<Playlist>,
+    ): String = buildString {
+        appendLine("查询：\"$q\"")
+        appendLine("歌手索引 ${artistIndex.second.size} 条；专辑索引 ${albumIndex.second.size} 条")
+        appendLine("命中：歌曲 ${trackHits.size}、歌手 ${artistHits.size}、专辑 ${albumHits.size}、歌单 ${playlistHits.size}")
+        if (q.isNotBlank() && artistHits.isEmpty()) {
+            val qInit = PinyinIndex.of(q).initials
+            val prefix = qInit.take(2)
+            val near = artistIndex.second.asSequence()
+                .filter { it.name.isNotBlank() }
+                .filter { PinyinIndex.of(it.name.lowercase()).initials.startsWith(prefix) }
+                .take(10)
+                .map { "${it.name}(${PinyinIndex.of(it.name.lowercase()).initials})" }
+                .toList()
+            if (near.isNotEmpty()) {
+                appendLine("首字母前缀为\"$prefix\"的歌手（最多 10 条）：${near.joinToString("、")}")
+            } else {
+                appendLine("索引中没有首字母前缀为\"$prefix\"的歌手；请确认该歌手是否在曲库中")
+            }
+        }
     }
 
     private fun observeFavoriteTracks(page: Page<Track>) {

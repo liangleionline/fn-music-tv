@@ -26,7 +26,7 @@ class AppPreferences(context: Context, private val localStore: LocalStore) {
         val migratedNamespace = store.getString(MIGRATED_NAMESPACE, null)
         val initial = when {
             account != null -> AppPreferencesState(
-                playerStyle = account.playerStyle?.let { runCatching { PlayerStyle.valueOf(it) }.getOrNull() } ?: PlayerStyle.Poster,
+                playerStyle = account.playerStyle?.let { runCatching { PlayerStyle.valueOf(it) }.getOrNull() } ?: PlayerStyle.Cover,
                 cacheBudget = account.cacheBudget?.let { runCatching { CacheBudget.valueOf(it) }.getOrNull() } ?: CacheBudget.Default,
                 onlineLyricsMatchingEnabled = account.onlineLyricsMatchingEnabled,
                 playlistOrder = readPlaylistOrder(value),

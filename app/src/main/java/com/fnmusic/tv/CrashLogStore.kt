@@ -40,6 +40,19 @@ object CrashLogStore {
 
     private fun file(context: Context): File = File(context.filesDir, FILE_NAME)
 
+    /** 追加一条带时间戳的文本记录（如搜索诊断），与崩溃日志写入同一文件，新的记录排在文件末尾。 */
+    fun appendEntry(context: Context, text: String) {
+        if (text.isBlank()) return
+        runCatching {
+            val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+            val sb = StringBuilder("=== 记录时间：").append(time).append(" ===\n").append(text.trimEnd()).append("\n\n")
+            val existing = if (file(context).exists()) file(context).readText() else ""
+            val merged = existing + sb.toString()
+            val trimmed = if (merged.length > MAX_BYTES) merged.takeLast(MAX_BYTES) else merged
+            file(context).writeText(trimmed)
+        }
+    }
+
     private fun append(context: Context, thread: Thread, throwable: Throwable) {
         // 崩溃时进程即将退出，尽力而为地写入，任何失败都不影响后续默认崩溃流程
         runCatching {
@@ -68,11 +81,11 @@ object CrashLogStore {
         }
     }
 
-    /** 读取崩溃日志（含未捕获异常记录与系统退出原因）；没有记录或读取失败时返回 null。 */
+    /** 读取日志（未捕获异常记录 + 系统退出原因，按时间倒序、最新的在前）；没有记录或读取失败时返回 null。 */
     fun read(context: Context): String? {
         val crashPart = runCatching {
             val file = file(context)
-            if (!file.exists()) null else file.readText().trim().ifEmpty { null }
+            if (!file.exists()) null else reverseEntries(file.readText()).trim().ifEmpty { null }
         }.getOrNull()
         val exitPart = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             runCatching { exitInfoLog(context) }.getOrNull()
@@ -80,6 +93,14 @@ object CrashLogStore {
             null
         }
         return listOfNotNull(crashPart, exitPart).joinToString("\n\n").ifBlank { null }
+    }
+
+    /** 把日志条目按时间倒序（最新的在前），便于设置页直接查看最近一次记录。 */
+    private fun reverseEntries(text: String): String {
+        val entries = text.split(Regex("(?=^=== )", RegexOption.MULTILINE))
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        return entries.asReversed().joinToString("\n\n")
     }
 
     /** 清空崩溃日志。 */

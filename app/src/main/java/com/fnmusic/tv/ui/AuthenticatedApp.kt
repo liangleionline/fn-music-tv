@@ -125,6 +125,7 @@ import androidx.tv.material3.Border
 import androidx.tv.material3.LocalContentColor
 import androidx.tv.material3.Text
 import com.fnmusic.tv.AuthenticatedAppDependencies
+import com.fnmusic.tv.CrashLogStore
 import com.fnmusic.tv.NowPlayingPresentation
 import com.fnmusic.tv.NowPlayingResourceState
 import com.fnmusic.tv.decodeArtwork
@@ -3920,6 +3921,7 @@ private fun SearchScreen(
     onOpenAlbum: (Album) -> Unit,
     onBack: () -> Unit,
 ) {
+    val context = LocalContext.current
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<SearchResults?>(null) }
     var searching by remember { mutableStateOf(false) }
@@ -3939,6 +3941,11 @@ private fun SearchScreen(
                 .onSuccess {
                     results = it
                     searching = false
+                    // 每次搜索后把诊断信息写入日志文件，可在 设置→崩溃日志 中查看“为什么没搜到”
+                    CrashLogStore.appendEntry(
+                        context,
+                        container.musicRepository.lastSearchDiagnostics().orEmpty(),
+                    )
                 }
                 .onFailure {
                     searchError = (it as? AppException)?.error ?: AppError.Unknown()
@@ -4010,6 +4017,7 @@ private fun SearchField(
 ) {
     var focused by remember { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
+    val imeVisible = WindowInsets.isImeVisible
     val shape = RoundedCornerShape(10.dp)
 
     // 进入搜索页即弹出键盘，焦点由 SearchScreen 的 LaunchedEffect 请求到输入框上，
@@ -4034,8 +4042,14 @@ private fun SearchField(
                 val key = event.key
                 if (key == Key.Enter || key == Key.DirectionCenter) {
                     if (event.type == KeyEventType.KeyUp) {
-                        keyboard?.hide()
-                        onSubmit()
+                        if (imeVisible) {
+                            // 键盘可见：按确定/回车 = 提交搜索并收起键盘
+                            keyboard?.hide()
+                            onSubmit()
+                        } else {
+                            // 键盘已收起但输入框仍持有焦点：按确定 = 重新弹出键盘继续编辑
+                            runCatching { keyboard?.show() }
+                        }
                     }
                     return@onPreviewKeyEvent true
                 }
