@@ -68,6 +68,12 @@ private const val SEARCH_PAGE_SIZE = 200
 /** 搜索索引使用的分页大小：与浏览页相同（浏览页已验证该大小下服务端分页正常、可完整拉取）。 */
 private const val SEARCH_INDEX_PAGE_SIZE = 50
 
+/** 大 size 单页请求：应对“服务端忽略 page 参数、但尊重 size”的情况（歌手/专辑等小目录）。 */
+private const val LARGE_CATALOG_SIZE = 10_000
+
+/** 歌曲目录的大 size 单页请求（过大可能导致单次响应过重，歌曲用 1000）。 */
+private const val TRACK_LARGE_PAGE_SIZE = 1_000
+
 /** 搜索单类目最大扫描页数（200 条/页，最多 10 万条），纯属防御性上限，防止异常服务端导致死循环。 */
 private const val SEARCH_MAX_PAGES = 500
 
@@ -294,7 +300,7 @@ class MusicRepository internal constructor(
     private val preferences: AppPreferences,
     private val localStore: LocalStore,
     metadataCapacityBytes: Int,
-    repositoryScope: CoroutineScope,
+    private val repositoryScope: CoroutineScope,
     onlineLyricsMatcher: suspend (LyricsMatchRequest) -> LyricsMatchResult,
 ) {
     constructor(
@@ -618,7 +624,8 @@ class MusicRepository internal constructor(
                 val matcher = SearchMatcher(q)
                 val artistIndex = searchArtists ?: ("" to emptyList())
                 val albumIndex = searchAlbums ?: ("" to emptyList())
-                val trackHits = scanTracks(matcher)
+                val trackScan = scanTracks(matcher)
+                val trackHits = trackScan.hits
                 val artistHits = artistIndex.second.filter { matcher.matchesArtist(it) }
                 val albumHits = albumIndex.second.filter { matcher.matchesAlbum(it) }
                 val playlistHits = playlists().filter { matcher.matchesName(it.name) }
@@ -626,6 +633,7 @@ class MusicRepository internal constructor(
                     q = q,
                     artistIndex = artistIndex,
                     albumIndex = albumIndex,
+                    trackPages = trackScan.pages,
                     trackHits = trackHits,
                     artistHits = artistHits,
                     albumHits = albumHits,
@@ -648,41 +656,85 @@ class MusicRepository internal constructor(
     /** 最近一次搜索的诊断信息；供 App 层写入崩溃日志文件，方便反馈“为什么搜不到”。 */
     fun lastSearchDiagnostics(): String? = lastSearchDiagnostics
 
-    /** 登录后后台预热搜索索引（歌手、专辑全量载入内存），幂等；账号切换时自动重建。 */
+    /**
+     * 登录后后台预热搜索索引：
+     * 1) 歌手、专辑全量载入内存（多策略兜底，保证完整覆盖）；
+     * 2) 后台预取歌曲目录页到磁盘缓存，让首次搜索也命中缓存、速度接近本地索引。
+     * 幂等；账号切换时自动重建。
+     */
     suspend fun warmSearchIndex() {
-        withContext(Dispatchers.Default) { ensureSearchIndex() }
+        withContext(Dispatchers.Default) {
+            ensureSearchIndex()
+            // 预取歌曲页（后台执行、不阻塞登录流程；搜索时会按需补齐剩余页）
+            runCatching {
+                repositoryScope.launch {
+                    scanPages(
+                        pageLoader = { page, size -> searchTracksPage(page, size) },
+                        size = SEARCH_PAGE_SIZE,
+                        startPage = 0,
+                        idOf = { it.guid.value },
+                        matches = { false },
+                    )
+                }
+            }
+        }
     }
 
     private suspend fun ensureSearchIndex() {
         val namespace = session.cacheNamespace()
         searchIndexMutex.withLock {
             if (searchArtists?.first == namespace && searchAlbums?.first == namespace) return
-            searchArtists = namespace to streamCatalog(
-                pages = { page -> artists(page, SEARCH_INDEX_PAGE_SIZE) },
+            searchArtists = namespace to loadFullCatalog(
+                pageLoader = { page, size -> artists(page, size) },
                 idOf = { it.guid.value },
-                matches = { true },
-            ).items
-            searchAlbums = namespace to streamCatalog(
-                pages = { page -> albums(page, SEARCH_INDEX_PAGE_SIZE) },
+            )
+            searchAlbums = namespace to loadFullCatalog(
+                pageLoader = { page, size -> albums(page, size) },
                 idOf = { it.guid.value },
-                matches = { true },
-            ).items
+            )
         }
     }
 
-    /** 歌曲搜索：先用大分页快速扫描，若服务端在该分页大小下分页异常，回退到浏览页验证过的 50 条/页重扫。 */
-    private suspend fun scanTracks(matcher: SearchMatcher): List<Track> {
-        val fast = streamCatalog(
-            pages = { page -> searchTracksPage(page, SEARCH_PAGE_SIZE) },
+    /** 歌曲搜索结果：hits 为命中项，pages 为策略 A 扫描页数（用于诊断）。 */
+    private data class TrackScanResult(val hits: List<Track>, val pages: Int)
+
+    /**
+     * 歌曲搜索：流式匹配、只保留命中项（内存安全）。多策略兜底应对服务端分页怪癖：
+     * A. 标准 0 起始大分页（200 条/页）快速扫描；若 A 未正常推进到空页（分页未前进），
+     * B. 一次 1000 条/页大请求（服务端可能忽略 page 但尊重 size）；
+     * C. 1 起始分页（50 条/页，部分服务端 page 从 1 开始且忽略 0）。
+     * 各策略命中结果合并去重后返回。
+     */
+    private suspend fun scanTracks(matcher: SearchMatcher): TrackScanResult {
+        val a = scanPages(
+            pageLoader = { page, size -> searchTracksPage(page, size) },
+            size = SEARCH_PAGE_SIZE,
+            startPage = 0,
             idOf = { it.guid.value },
             matches = matcher::matchesTrack,
         )
-        if (fast.complete) return fast.items
-        return streamCatalog(
-            pages = { page -> searchTracksPage(page, SEARCH_INDEX_PAGE_SIZE) },
+        if (a.complete && a.pages > 1) return TrackScanResult(a.items, a.pages)
+        val b = scanPages(
+            pageLoader = { page, size -> searchTracksPage(page, size) },
+            size = TRACK_LARGE_PAGE_SIZE,
+            startPage = 0,
             idOf = { it.guid.value },
             matches = matcher::matchesTrack,
-        ).items
+            maxPages = 1,
+        )
+        val c = scanPages(
+            pageLoader = { page, size -> searchTracksPage(page, size) },
+            size = SEARCH_INDEX_PAGE_SIZE,
+            startPage = 1,
+            idOf = { it.guid.value },
+            matches = matcher::matchesTrack,
+        )
+        val seen = HashSet<String>()
+        val out = ArrayList<Track>()
+        for (item in a.items + b.items + c.items) {
+            if (seen.add(item.guid.value)) out.add(item)
+        }
+        return TrackScanResult(out, a.pages)
     }
 
     /** 搜索专用歌曲分页；缓存键含分页大小，避免不同分页大小的缓存互相污染。 */
@@ -693,31 +745,32 @@ class MusicRepository internal constructor(
         fetch = { session.authenticated { it.allTracks(page, size) } },
     ) { it.toDomain() }.also(::observeFavoriteTracks)
 
-    /** 流式扫描结果：items 为命中项；complete=false 表示因“整页重复（分页未前进）”提前结束，可回退重扫。 */
-    private data class CatalogScanResult<T>(val items: List<T>, val complete: Boolean)
+    /** 目录扫描结果：items 为保留项；complete=true 表示以“空页”正常结束（分页推进到末尾）；pages 为拉取页数。 */
+    private data class CatalogScanResult<T>(val items: List<T>, val complete: Boolean, val pages: Int)
 
     /**
-     * 流式扫描分页目录：逐页拉取、即时匹配、只保留命中项，内存占用只与命中数量有关。
-     * 终止条件：拉取量达到服务端 total、遇到空页、整页均为已见重复项（服务端分页未前进）或超过安全上限。
-     * 注意：不能用“相邻页首元素相同即停”这类启发式，正常分页服务在特定排序下也会命中该情况，导致只扫第一页。
+     * 逐页扫描目录：从 startPage 起按给定 size 逐页拉取，只保留匹配项（matches={true} 时全量保留）。
+     * 终止条件：遇到空页、整页均为已见重复项（服务端分页未前进）或超过安全上限。
+     * 注意：不依赖服务端 total——部分服务端不返回 total（或 total 缺省为页大小），
+     * 若用 total 终止会误判“已拉完”而只扫第一页，这正是此前索引只有 50 条的根因。
      */
-    private suspend fun <T> streamCatalog(
-        pages: suspend (Int) -> Page<T>,
+    private suspend fun <T> scanPages(
+        pageLoader: suspend (page: Int, size: Int) -> Page<T>,
+        size: Int,
+        startPage: Int,
         idOf: (T) -> String,
         matches: (T) -> Boolean,
+        maxPages: Int = SEARCH_MAX_PAGES,
     ): CatalogScanResult<T> {
         val out = ArrayList<T>()
         val seen = HashSet<String>()
-        var page = 0
-        var fetched = 0
-        var total = Int.MAX_VALUE
+        var page = startPage
+        var pages = 0
         var stuck = false
-        while (page < SEARCH_MAX_PAGES && fetched < total) {
-            val result = pages(page)
-            val items = result.items
+        while (pages < maxPages) {
+            val items = pageLoader(page, size).items
+            pages += 1
             if (items.isEmpty()) break
-            total = result.total
-            fetched += items.size
             var newlySeen = 0
             for (item in items) {
                 if (seen.add(idOf(item))) {
@@ -732,7 +785,29 @@ class MusicRepository internal constructor(
             }
             page += 1
         }
-        return CatalogScanResult(out, complete = !stuck)
+        return CatalogScanResult(out, complete = !stuck, pages = pages)
+    }
+
+    /**
+     * 全量拉取目录（歌手/专辑等小列表）：多策略兜底，应对服务端各种分页怪癖：
+     * A. 标准 0 起始分页；B. 若 A 未正常推进，一次大 size 请求（服务端可能忽略 page 但尊重 size）；
+     * C. 尝试 1 起始分页（部分服务端 page 从 1 开始且忽略 0）。
+     * 最后合并所有策略结果去重，保证覆盖尽可能完整。
+     */
+    private suspend fun <T> loadFullCatalog(
+        pageLoader: suspend (page: Int, size: Int) -> Page<T>,
+        idOf: (T) -> String,
+    ): List<T> {
+        val a = scanPages(pageLoader, SEARCH_INDEX_PAGE_SIZE, 0, idOf, { true })
+        if (a.complete && a.pages > 1) return a.items
+        val b = scanPages(pageLoader, LARGE_CATALOG_SIZE, 0, idOf, { true }, maxPages = 1)
+        val c = scanPages(pageLoader, SEARCH_INDEX_PAGE_SIZE, 1, idOf, { true })
+        val seen = HashSet<String>()
+        val merged = ArrayList<T>()
+        for (item in a.items + b.items + c.items) {
+            if (seen.add(idOf(item))) merged.add(item)
+        }
+        return merged
     }
 
     /** 生成搜索诊断文本：查询、索引规模、命中数，以及“可能想找”的近似歌手（首字母前缀接近）。 */
@@ -740,6 +815,7 @@ class MusicRepository internal constructor(
         q: String,
         artistIndex: Pair<String, List<Artist>>,
         albumIndex: Pair<String, List<Album>>,
+        trackPages: Int,
         trackHits: List<Track>,
         artistHits: List<Artist>,
         albumHits: List<Album>,
@@ -747,6 +823,7 @@ class MusicRepository internal constructor(
     ): String = buildString {
         appendLine("查询：\"$q\"")
         appendLine("歌手索引 ${artistIndex.second.size} 条；专辑索引 ${albumIndex.second.size} 条")
+        appendLine("歌曲扫描 ${trackPages} 页")
         appendLine("命中：歌曲 ${trackHits.size}、歌手 ${artistHits.size}、专辑 ${albumHits.size}、歌单 ${playlistHits.size}")
         if (q.isNotBlank() && artistHits.isEmpty()) {
             val qInit = PinyinIndex.of(q).initials
