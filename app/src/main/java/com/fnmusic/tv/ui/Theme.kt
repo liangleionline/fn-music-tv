@@ -14,6 +14,7 @@ object FnColors {
     val Text = Color(0xFFF4F2EC)
     val Muted = Color(0xFFA9ADB4)
     val Coral = Color(0xFFFF7657)
+    val Amber = Color(0xFFFFB46B)
     val FocusFill = lerp(Coral, Surface, 0.42f)
     val Teal = Color(0xFF55C5A5)
     val Warning = Color(0xFFE8C36A)

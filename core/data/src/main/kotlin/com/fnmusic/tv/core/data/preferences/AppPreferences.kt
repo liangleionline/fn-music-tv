@@ -24,7 +24,7 @@ class AppPreferences(context: Context, private val localStore: LocalStore) {
         namespace = value
         val account = localStore.account(value)
         val migratedNamespace = store.getString(MIGRATED_NAMESPACE, null)
-        val initial = when {
+        var initial = when {
             account != null -> AppPreferencesState(
                 playerStyle = account.playerStyle?.let { runCatching { PlayerStyle.valueOf(it) }.getOrNull() } ?: PlayerStyle.Cover,
                 cacheBudget = account.cacheBudget?.let { runCatching { CacheBudget.valueOf(it) }.getOrNull() } ?: CacheBudget.Default,
@@ -37,6 +37,14 @@ class AppPreferences(context: Context, private val localStore: LocalStore) {
                 playlistOrder = readPlaylistOrder(value),
                 backgroundContinueOnExit = store.getBoolean(BACKGROUND_CONTINUE_ON_EXIT, false),
             )
+        }
+        // 一次性迁移：早期版本默认值写错，会把用户从未选择过的“大海报模式”写进存储。
+        // 从本版本起统一回默认 CD 模式；之后用户显式切换过的大海报仍然保留。
+        if (!store.getBoolean(POSTER_DEFAULT_MIGRATED, false)) {
+            store.edit().putBoolean(POSTER_DEFAULT_MIGRATED, true).apply()
+            if (initial.playerStyle == PlayerStyle.Poster) {
+                initial = initial.copy(playerStyle = PlayerStyle.Cover)
+            }
         }
         _state.value = initial
         store.edit()
@@ -120,6 +128,7 @@ class AppPreferences(context: Context, private val localStore: LocalStore) {
         const val ONLINE_LYRICS_MATCHING = "online_lyrics_matching"
         const val MIGRATED_NAMESPACE = "room_migrated_namespace"
         const val BACKGROUND_CONTINUE_ON_EXIT = "background_continue_on_exit"
+        const val POSTER_DEFAULT_MIGRATED = "poster_default_migrated_v2"
         const val PLAY_LIST_ORDER_PREFIX = "playlist_order_"
         const val PROFILE_SEPARATOR = "\u0001"
 

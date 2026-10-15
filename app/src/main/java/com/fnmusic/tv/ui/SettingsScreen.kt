@@ -559,7 +559,8 @@ private fun SettingsChoiceButton(
         colors = ButtonDefaults.colors(
             containerColor = if (selected) Color(0xFF4B3936) else SettingsControl,
             contentColor = FnColors.Text,
-            focusedContainerColor = if (selected) Color(0xFF513B37) else FnColors.FocusFill,
+            // 聚焦≠选中：未选中的聚焦用中性蓝，避免被误认为“也被选中”
+            focusedContainerColor = if (selected) Color(0xFF513B37) else Color(0xFF232B36),
             focusedContentColor = FnColors.Text,
             pressedContainerColor = FnColors.FocusFill,
             pressedContentColor = FnColors.Text,
@@ -569,7 +570,11 @@ private fun SettingsChoiceButton(
                 BorderStroke(if (selected) 1.5.dp else 0.5.dp, if (selected) FnColors.Coral else Color(0xFF454B4D)),
                 shape = shape,
             ),
-            focusedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
+            // 聚焦边框：选中项用珊瑚橙，未选中项用暖金，一眼可辨
+            focusedBorder = Border(
+                BorderStroke(1.5.dp, if (selected) FnColors.Coral else FnColors.Amber),
+                shape = shape,
+            ),
             pressedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
         ),
         contentPadding = PaddingValues(horizontal = 13.dp, vertical = 0.dp),
