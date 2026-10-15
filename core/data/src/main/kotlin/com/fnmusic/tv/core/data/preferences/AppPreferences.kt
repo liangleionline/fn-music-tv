@@ -106,7 +106,7 @@ class AppPreferences(context: Context, private val localStore: LocalStore) {
 
     private fun read() = AppPreferencesState(
         playerStyle = store.getString(PLAYER_STYLE, null)?.let { runCatching { PlayerStyle.valueOf(it) }.getOrNull() }
-            ?: PlayerStyle.Poster,
+            ?: PlayerStyle.Cover,
         cacheBudget = store.getString(CACHE_BUDGET, null)?.let { runCatching { CacheBudget.valueOf(it) }.getOrNull() }
             ?: CacheBudget.Default,
         onlineLyricsMatchingEnabled = store.getBoolean(ONLINE_LYRICS_MATCHING, true),

@@ -9,7 +9,7 @@ enum class CacheBudget(val megabytes: Int) {
 }
 
 data class AppPreferencesState(
-    val playerStyle: PlayerStyle = PlayerStyle.Poster,
+    val playerStyle: PlayerStyle = PlayerStyle.Cover,
     val cacheBudget: CacheBudget = CacheBudget.Default,
     val onlineLyricsMatchingEnabled: Boolean = true,
     /** 用户自定义歌单排序（歌单 guid 列表，按展示先后排列），空表示沿用服务器默认顺序。 */
