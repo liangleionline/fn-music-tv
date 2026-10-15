@@ -668,7 +668,7 @@ internal fun SettingsCheckbox(
             contentAlignment = Alignment.Center,
         ) {
             if (selected) {
-                Text("✓", color = Color(0xFF17201E), fontSize = 12.sp, lineHeight = 12.sp, fontWeight = FontWeight.Bold)
+                Text("✓", color = FnColors.Background, fontSize = 12.sp, lineHeight = 12.sp, fontWeight = FontWeight.Bold)
             }
         }
         Text(
