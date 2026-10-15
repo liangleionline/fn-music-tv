@@ -456,8 +456,8 @@ private fun SegmentedLibraryTabs(
     Row(
         modifier = Modifier
             .size(width = 162.dp, height = 49.dp)
-            .background(Color(0xFF171B1D), containerShape)
-            .border(0.5.dp, Color.White.copy(alpha = 0.12f), containerShape)
+            .background(FnColors.SurfaceAlt, containerShape)
+            .border(0.5.dp, Color.White.copy(alpha = 0.10f), containerShape)
             .padding(3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -505,16 +505,16 @@ private fun LibraryTab(
         scale = ButtonDefaults.scale(focusedScale = 1.025f),
         colors = ButtonDefaults.colors(
             containerColor = if (selected) FnColors.Coral else Color.Transparent,
-            contentColor = if (selected) FnColors.Background else Color(0xFFADB0B6),
-            focusedContainerColor = if (selected) Color(0xFFFF866D) else FnColors.FocusFill,
+            contentColor = if (selected) FnColors.Background else FnColors.Muted,
+            focusedContainerColor = if (selected) FnColors.Amber else FnColors.FocusFill,
             focusedContentColor = if (selected) FnColors.Background else FnColors.Text,
-            pressedContainerColor = FnColors.Coral,
+            pressedContainerColor = FnColors.Amber,
             pressedContentColor = FnColors.Background,
         ),
         border = ButtonDefaults.border(
             border = Border(BorderStroke(0.dp, Color.Transparent), shape = shape),
-            focusedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
-            pressedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
+            focusedBorder = Border(BorderStroke(1.5.dp, FnColors.Amber), shape = shape),
+            pressedBorder = Border(BorderStroke(1.5.dp, FnColors.Amber), shape = shape),
         ),
         contentPadding = PaddingValues(0.dp),
     ) {
@@ -543,15 +543,15 @@ internal fun NowPlayingPill(
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1.04f),
         colors = ButtonDefaults.colors(
-            containerColor = Color(0xFF232827),
+            containerColor = FnColors.SurfaceAlt,
             contentColor = FnColors.Text,
-            focusedContainerColor = Color(0xFF343A38),
+            focusedContainerColor = Color(0xFF1D2632),
             focusedContentColor = FnColors.Text,
-            pressedContainerColor = Color(0xFF3B413F),
+            pressedContainerColor = Color(0xFF232E3C),
             pressedContentColor = FnColors.Text,
         ),
         border = ButtonDefaults.border(
-            border = Border(BorderStroke(0.5.dp, Color(0xFF454C49)), shape = shape),
+            border = Border(BorderStroke(0.5.dp, Color.White.copy(alpha = 0.14f)), shape = shape),
             focusedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
             pressedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
         ),
@@ -578,7 +578,7 @@ internal fun NowPlayingPill(
                     Spacer(Modifier.width(3.5.dp))
                     Text(
                         if (playback.isPlaying) "正在播放" else "已暂停",
-                        color = Color(0xFFB7BBB7),
+                        color = FnColors.Muted,
                         fontSize = 9.sp,
                         lineHeight = 9.sp,
                         style = TextStyle(
@@ -605,7 +605,7 @@ internal fun NowPlayingPill(
                         Spacer(Modifier.width(4.5.dp))
                         Text(
                             playback.artist,
-                            color = Color(0xFFA7ABA7),
+                            color = FnColors.Muted,
                             fontSize = 9.sp,
                             lineHeight = 10.sp,
                             maxLines = 1,
@@ -616,7 +616,7 @@ internal fun NowPlayingPill(
                 }
             }
             Spacer(Modifier.width(5.dp))
-            Text("›", color = Color(0xFFC6C9C5), fontSize = 17.sp, lineHeight = 17.sp)
+            Text("›", color = FnColors.Muted, fontSize = 17.sp, lineHeight = 17.sp)
         }
     }
 }
@@ -624,7 +624,7 @@ internal fun NowPlayingPill(
 @Composable
 private fun NowPlayingArtworkFallback(title: String) {
     Box(
-        Modifier.size(27.dp).background(Color(0xFF31413D), CircleShape),
+        Modifier.size(27.dp).background(Color(0xFF20332E), CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -739,8 +739,15 @@ private fun BrowseHome(
             contentDownFocus = roamFocus,
         )
         Spacer(Modifier.height(12.dp))
-        Text("听点什么", fontSize = 34.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.Bottom) {
+            Box(Modifier.width(6.dp).height(30.dp).background(FnGradients.Primary, RoundedCornerShape(3.dp)))
+            Spacer(Modifier.width(13.dp))
+            Column {
+                Text("飞牛音乐", fontSize = 33.sp, lineHeight = 36.sp, fontWeight = FontWeight.Bold)
+                Text("你的曲库 · 随时开播", color = FnColors.Muted, fontSize = 14.sp, lineHeight = 17.sp)
+            }
+        }
+        Spacer(Modifier.height(20.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
             HomeFeatureCard(
                 title = "随机漫游",
@@ -799,7 +806,13 @@ private fun BrowseHome(
                 },
             )
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(18.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("我的歌单", fontSize = 21.sp, lineHeight = 24.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(11.dp))
+            Text("长按确定键可排序 · 前三展示在首页", color = FnColors.Muted, fontSize = 12.sp, lineHeight = 14.sp)
+        }
+        Spacer(Modifier.height(10.dp))
         LazyRow(
             state = rowState,
             contentPadding = PaddingValues(4.dp),
@@ -890,17 +903,21 @@ private fun HomeFeatureCard(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(8.dp)
+    val shape = RoundedCornerShape(22.dp)
     val background = when (kind) {
-        HomeArtworkKind.Roam -> Brush.horizontalGradient(listOf(Color(0xFF071D19), Color(0xFF102823)))
-        HomeArtworkKind.Favorites -> Brush.horizontalGradient(listOf(Color(0xFF1C1110), Color(0xFF2A1615)))
+        HomeArtworkKind.Roam -> Brush.linearGradient(
+            listOf(Color(0xFF07201C), Color(0xFF0E3A31), Color(0xFF12312C)),
+        )
+        HomeArtworkKind.Favorites -> Brush.linearGradient(
+            listOf(Color(0xFF1C1114), Color(0xFF331A1B), Color(0xFF271319)),
+        )
         HomeArtworkKind.Collection,
         HomeArtworkKind.PlaylistGrid,
-        -> Brush.horizontalGradient(listOf(Color(0xFF17201E), Color(0xFF22302D)))
+        -> Brush.linearGradient(listOf(Color(0xFF141C2A), Color(0xFF1E2A3A)))
     }
     Button(
         onClick = onClick,
-        modifier = modifier.height(150.dp),
+        modifier = modifier.height(158.dp),
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1.018f),
         colors = ButtonDefaults.colors(
@@ -912,13 +929,13 @@ private fun HomeFeatureCard(
             pressedContentColor = FnColors.Text,
         ),
         border = ButtonDefaults.border(
-            border = Border(BorderStroke(0.5.dp, Color.White.copy(alpha = 0.05f)), shape = shape),
-            focusedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
-            pressedBorder = Border(BorderStroke(1.5.dp, FnColors.Coral), shape = shape),
+            border = Border(BorderStroke(0.5.dp, Color.White.copy(alpha = 0.06f)), shape = shape),
+            focusedBorder = Border(BorderStroke(1.5.dp, FnColors.Amber), shape = shape),
+            pressedBorder = Border(BorderStroke(1.5.dp, FnColors.Amber), shape = shape),
         ),
         contentPadding = PaddingValues(0.dp),
     ) {
-        Box(Modifier.fillMaxSize().background(background)) {
+        Box(Modifier.fillMaxSize().background(background).clip(shape)) {
             FeatureCoverDeck(kind, artwork, Modifier.fillMaxSize())
             Box(
                 Modifier
@@ -1085,14 +1102,14 @@ private fun HomePlaylistLockup(
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(8.dp)
+    val shape = RoundedCornerShape(14.dp)
     Button(
         onClick = onClick,
         modifier = modifier
-            .size(width = 190.dp, height = 174.dp)
+            .size(width = 192.dp, height = 176.dp)
             .onFocusChanged { focused = it.isFocused },
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
-        scale = ButtonDefaults.scale(focusedScale = 1.018f),
+        scale = ButtonDefaults.scale(focusedScale = 1.02f),
         colors = ButtonDefaults.colors(
             containerColor = Color.Transparent,
             contentColor = FnColors.Text,
@@ -1107,9 +1124,14 @@ private fun HomePlaylistLockup(
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(120.dp)
-                    .then(if (focused) Modifier.border(1.5.dp, FnColors.Coral, shape) else Modifier)
-                    .clip(shape),
+                    .height(122.dp)
+                    .then(
+                        if (focused) {
+                            Modifier.border(1.5.dp, FnColors.Amber, shape).clip(shape)
+                        } else {
+                            Modifier.border(0.5.dp, Color.White.copy(alpha = 0.08f), shape).clip(shape)
+                        },
+                    ),
             ) {
                 PlaylistTileArtwork(
                     title = title,
@@ -3040,23 +3062,29 @@ private fun DetailBackButton(modifier: Modifier = Modifier, onClick: () -> Unit)
 
 @Composable
 private fun DetailTabButton(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(5.dp)
+    val shape = RoundedCornerShape(12.dp)
     Button(
         onClick = onClick,
-        modifier = modifier.height(40.dp).semantics { this.selected = selected },
+        modifier = modifier.height(42.dp).semantics { this.selected = selected },
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1.04f),
         colors = ButtonDefaults.colors(
-            containerColor = if (selected) FnColors.Coral.copy(alpha = 0.2f) else Color.Transparent,
+            containerColor = if (selected) FnColors.Coral.copy(alpha = 0.22f) else Color.Transparent,
             contentColor = if (selected) FnColors.Coral else FnColors.Muted,
             focusedContainerColor = FnColors.FocusFill,
             focusedContentColor = FnColors.Text,
             pressedContainerColor = FnColors.FocusFill,
             pressedContentColor = FnColors.Text,
         ),
-        contentPadding = PaddingValues(horizontal = 17.dp, vertical = 0.dp),
+        contentPadding = PaddingValues(horizontal = 19.dp, vertical = 0.dp),
     ) {
-        Text(label, fontSize = 15.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (selected) {
+                Box(Modifier.width(5.dp).height(5.dp).background(FnGradients.Primary, CircleShape))
+                Spacer(Modifier.width(7.dp))
+            }
+            Text(label, fontSize = 15.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
+        }
     }
 }
 
@@ -3081,7 +3109,7 @@ private fun DetailTrackRow(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(5.dp)
+    val shape = RoundedCornerShape(10.dp)
     Button(
         enabled = enabled,
         onClick = onClick,
@@ -3774,8 +3802,8 @@ private fun CatalogPageArrowButton(
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1.05f),
         colors = ButtonDefaults.colors(
-            containerColor = Color(0xFF171B1D),
-            contentColor = Color(0xFFB8BEC1),
+            containerColor = FnColors.SurfaceAlt,
+            contentColor = FnColors.Muted,
             focusedContainerColor = FnColors.Coral.copy(alpha = 0.09f),
             focusedContentColor = FnColors.Coral,
             pressedContainerColor = FnColors.Coral.copy(alpha = 0.14f),
@@ -4018,7 +4046,7 @@ private fun SearchField(
     var focused by remember { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
     val imeVisible = WindowInsets.isImeVisible
-    val shape = RoundedCornerShape(10.dp)
+    val shape = RoundedCornerShape(14.dp)
 
     // 进入搜索页即弹出键盘，焦点由 SearchScreen 的 LaunchedEffect 请求到输入框上，
     // 用户无需再按一次确定键即可直接输入。
@@ -4055,8 +4083,8 @@ private fun SearchField(
                 }
                 false
             }
-            .background(if (focused) FnColors.FocusFill else Color(0xFF171B1D), shape)
-            .border(1.dp, if (focused) FnColors.Coral else Color.White.copy(alpha = 0.12f), shape)
+            .background(if (focused) FnColors.FocusFill else FnColors.SurfaceAlt, shape)
+            .border(if (focused) 1.5.dp else 1.dp, if (focused) FnColors.Amber else Color.White.copy(alpha = 0.14f), shape)
             .padding(horizontal = 18.dp, vertical = 12.dp),
         textStyle = TextStyle(fontSize = 19.sp, color = FnColors.Text),
         singleLine = true,
@@ -4157,8 +4185,10 @@ private fun SearchSectionTitle(title: String) {
         Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        Box(Modifier.width(5.dp).height(5.dp).background(FnGradients.Primary, CircleShape))
+        Spacer(Modifier.width(9.dp))
         Text(title, fontSize = 23.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.width(10.dp))
-        Box(Modifier.height(1.dp).width(28.dp).background(FnColors.Coral, CircleShape))
+        Box(Modifier.height(1.dp).width(32.dp).background(FnColors.Muted.copy(alpha = 0.4f), CircleShape))
     }
 }

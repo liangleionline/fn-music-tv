@@ -858,7 +858,7 @@ private fun LoginCheckbox(
                 .border(2.dp, if (selected) FnColors.Warning else FnColors.Muted, RoundedCornerShape(3.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            if (selected) Text("✓", color = Color(0xFF17201E), fontSize = 19.sp, fontWeight = FontWeight.Bold)
+            if (selected) Text("✓", color = FnColors.Background, fontSize = 19.sp, fontWeight = FontWeight.Bold)
         }
         Text(label, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }

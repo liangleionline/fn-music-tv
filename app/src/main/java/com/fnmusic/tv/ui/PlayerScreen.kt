@@ -552,23 +552,44 @@ private fun PlayerBackdrop(targetColor: Color, modifier: Modifier = Modifier) {
         progress.animateTo(1f, tween(durationMillis = 650, easing = LinearEasing))
     }
     val animatedColor = androidx.compose.ui.graphics.lerp(fromColor, toColor, progress.value)
+    val glowColor = androidx.compose.ui.graphics.lerp(animatedColor, FnColors.Background, 0.30f)
     Canvas(modifier) {
-        val centerColor = androidx.compose.ui.graphics.lerp(animatedColor, FnColors.Background, 0.58f)
-        val rightColor = androidx.compose.ui.graphics.lerp(animatedColor, FnColors.Background, 0.65f)
+        val w = size.width
+        val h = size.height
+        // 基底：深蓝黑到主题色的横向渐变
         drawRect(
             brush = Brush.horizontalGradient(
-                0f to animatedColor,
-                0.52f to centerColor,
-                1f to rightColor,
+                0f to FnColors.Background,
+                0.42f to animatedColor,
+                1f to androidx.compose.ui.graphics.lerp(animatedColor, FnColors.Background, 0.62f),
             ),
         )
-        drawRect(Color.Black.copy(alpha = 0.25f))
-        drawRect(Color.White.copy(alpha = 0.025f))
+        // 左上暖光晕：让画面像“深夜唱片机旁的一盏灯”
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(glowColor, Color.Transparent),
+                center = androidx.compose.ui.geometry.Offset(w * 0.24f, h * 0.18f),
+                radius = w * 0.75f,
+            ),
+            center = androidx.compose.ui.geometry.Offset(w * 0.24f, h * 0.18f),
+            radius = w * 0.75f,
+        )
+        // 细颗粒感高光（避免纯色块显得廉价）
+        drawRect(Color.White.copy(alpha = 0.018f))
+        // 底部压暗，突出前景内容
         drawRect(
             brush = Brush.verticalGradient(
-                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.22f)),
-                startY = size.height * 0.55f,
-                endY = size.height,
+                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.30f)),
+                startY = h * 0.48f,
+                endY = h,
+            ),
+        )
+        // 顶部微光
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(Color.White.copy(alpha = 0.035f), Color.Transparent),
+                startY = 0f,
+                endY = h * 0.22f,
             ),
         )
     }
@@ -590,7 +611,15 @@ private fun PlayerPosterBackdrop(targetColor: Color, modifier: Modifier = Modifi
         drawRect(
             brush = Brush.horizontalGradient(
                 0f to animatedColor,
-                1f to androidx.compose.ui.graphics.lerp(animatedColor, FnColors.Background, 0.05f),
+                1f to androidx.compose.ui.graphics.lerp(animatedColor, FnColors.Background, 0.06f),
+            ),
+        )
+        // 底部轻微压暗，让海报氛围更沉浸
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.22f)),
+                startY = size.height * 0.62f,
+                endY = size.height,
             ),
         )
     }
@@ -961,6 +990,23 @@ private fun DiscArtwork(
     val recordSize = size * 0.84f
     val labelSize = size * 0.44f
     Box(Modifier.size(size), contentAlignment = Alignment.Center) {
+        // 唱片柔光：让黑胶在黑夜里有一圈氛围光晕
+        Canvas(Modifier.fillMaxSize()) {
+            val radius = minOf(this.size.width, this.size.height) / 2f
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        FnColors.Teal.copy(alpha = 0.20f),
+                        FnColors.Violet.copy(alpha = 0.10f),
+                        Color.Transparent,
+                    ),
+                    center = androidx.compose.ui.geometry.Offset(this.size.width / 2f, this.size.height / 2f),
+                    radius = radius * 1.02f,
+                ),
+                center = androidx.compose.ui.geometry.Offset(this.size.width / 2f, this.size.height / 2f),
+                radius = radius * 1.02f,
+            )
+        }
         Box(Modifier.size(recordSize).graphicsLayer { rotationZ = rotation.value }, contentAlignment = Alignment.Center) {
             Canvas(Modifier.fillMaxSize()) {
                 val radius = minOf(this.size.width, this.size.height) / 2f
@@ -970,6 +1016,16 @@ private fun DiscArtwork(
                     val ringRadius = radius * (0.52f + ring * 0.029f)
                     drawCircle(Color.White.copy(alpha = if (ring % 3 == 0) 0.09f else 0.045f), ringRadius, style = Stroke(width = 1.dp.toPx()))
                 }
+                // 高光弧：模拟黑胶表面反光，增强质感
+                drawArc(
+                    color = Color.White.copy(alpha = 0.06f),
+                    startAngle = 128f,
+                    sweepAngle = 34f,
+                    useCenter = false,
+                    topLeft = androidx.compose.ui.geometry.Offset(radius * 0.10f, radius * 0.10f),
+                    size = androidx.compose.ui.geometry.Size(radius * 1.8f, radius * 1.8f),
+                    style = Stroke(width = radius * 0.16f, cap = StrokeCap.Round),
+                )
                 drawArc(
                     color = FnColors.Teal.copy(alpha = 0.42f),
                     startAngle = -18f,
