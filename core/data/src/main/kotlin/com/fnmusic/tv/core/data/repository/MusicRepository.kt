@@ -30,6 +30,7 @@ import com.fnmusic.tv.core.model.Playlist
 import com.fnmusic.tv.core.model.RoamWindow
 import com.fnmusic.tv.core.model.SharedLibrary
 import com.fnmusic.tv.core.model.Track
+import com.fnmusic.tv.core.model.TrackGuid
 import com.fnmusic.tv.core.model.playback.QueueSource
 import com.fnmusic.tv.core.model.preferences.CacheUsage
 import com.fnmusic.tv.core.lyrics.DefaultLyricsSources
@@ -55,6 +56,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 
@@ -76,6 +78,12 @@ private const val TRACK_LARGE_PAGE_SIZE = 1_000
 
 /** 搜索单类目最大扫描页数（200 条/页，最多 10 万条），纯属防御性上限，防止异常服务端导致死循环。 */
 private const val SEARCH_MAX_PAGES = 500
+
+/** 歌曲搜索索引（预计算拼音）在本地 cache_index 表中的键名。 */
+private const val SEARCH_TRACK_INDEX_KEY = "search_track_index_v1"
+
+/** 歌曲搜索索引的刷新周期：超过该时长后在后台静默重建（不阻塞搜索）。 */
+private const val SEARCH_INDEX_TTL_MS = 24L * 60 * 60 * 1000
 
 /** 客户端本地搜索结果，按歌单 / 歌手 / 专辑 / 歌曲分类。 */
 data class SearchResults(
@@ -102,6 +110,29 @@ private class SearchMatcher(private val query: String) {
     fun matchesAlbum(album: Album): Boolean = matches(album.name)
 
     fun matchesName(name: String): Boolean = matches(name)
+
+    /** 基于预计算拼音的歌曲索引条目匹配（不重复转拼音，毫秒级）。 */
+    fun matchesTrackEntry(entry: TrackSearchEntry): Boolean =
+        matchesPrecomputed(entry.name, entry.namePinyin, entry.nameInitials)
+
+    private fun matchesPrecomputed(lower: String, pinyin: String, initials: String): Boolean {
+        if (lower.contains(qLower)) return true
+        if (qPinyin.isNotEmpty() && pinyin.contains(qPinyin)) return true
+        if (qInitials.isNotEmpty() && initials.contains(qInitials)) return true
+        return false
+    }
+
+    /** 预计算拼音的排序器：前缀优先、其次包含，避免排序时重复转拼音。 */
+    val trackEntryRank: Comparator<TrackSearchEntry> =
+        compareByDescending<TrackSearchEntry> { e ->
+            when {
+                e.name.startsWith(qLower) -> 3
+                e.namePinyin.startsWith(qPinyin) && qPinyin.isNotEmpty() -> 2
+                e.nameInitials.startsWith(qInitials) && qInitials.isNotEmpty() -> 2
+                e.name.contains(qLower) -> 1
+                else -> 0
+            }
+        }.thenBy { it.name }
 
     private fun matches(text: String): Boolean {
         if (text.isEmpty()) return false
@@ -184,6 +215,38 @@ private class PinyinIndex(
         }
     }
 }
+
+/**
+ * 歌曲搜索的内存索引条目：歌名与预计算的拼音一次成型，搜索时只做纯字符串过滤。
+ */
+private data class TrackSearchEntry(
+    val track: Track,
+    val name: String,
+    val namePinyin: String,
+    val nameInitials: String,
+)
+
+/** 歌曲搜索索引的磁盘持久化格式（写入 cache_index 表，跨启动秒级恢复）。 */
+@Serializable
+private data class TrackSearchIndexDto(
+    val version: Int,
+    val tracks: List<TrackSearchEntryDto>,
+)
+
+@Serializable
+private data class TrackSearchEntryDto(
+    val guid: String,
+    val title: String,
+    val artistName: String?,
+    val albumName: String?,
+    val coverId: String?,
+    val durationMs: Long?,
+    val isCue: Boolean,
+    val accessStatus: Int?,
+    val audioFormat: String?,
+    val namePinyin: String,
+    val nameInitials: String,
+)
 
 internal data class ArtworkBounds(val width: Int, val height: Int)
 
@@ -328,6 +391,8 @@ class MusicRepository internal constructor(
     )
     private val favoriteMutationMutex = Mutex()
     private val searchIndexMutex = Mutex()
+    /** 歌曲搜索索引（预计算拼音，内存），按登录账号缓存；登录后由 warmSearchIndex() 后台构建，搜索时按需补齐。 */
+    private var searchTrackEntries: Pair<String, List<TrackSearchEntry>>? = null
     /** 全量歌手/专辑搜索索引，按登录账号缓存；登录后由 warmSearchIndex() 后台预热，搜索时按需补齐。 */
     private var searchArtists: Pair<String, List<Artist>>? = null
     private var searchAlbums: Pair<String, List<Album>>? = null
@@ -625,8 +690,14 @@ class MusicRepository internal constructor(
                 val matcher = SearchMatcher(q)
                 val artistIndex = searchArtists ?: ("" to emptyList())
                 val albumIndex = searchAlbums ?: ("" to emptyList())
-                val trackScan = scanTracks(matcher)
-                val trackHits = trackScan.hits
+                val trackIndex = searchTrackEntries ?: ("" to emptyList())
+                // 歌曲：优先走内存预计算拼音索引（无网络、无实时转拼音，毫秒级）；
+                // 索引不可用时回退到流式分页扫描（多策略兜底）。
+                val trackHits = if (trackIndex.second.isNotEmpty()) {
+                    trackIndex.second.filter { matcher.matchesTrackEntry(it) }.map { it.track }
+                } else {
+                    scanTracks(matcher).hits
+                }
                 val artistHits = artistIndex.second.filter { matcher.matchesArtist(it) }
                 val albumHits = albumIndex.second.filter { matcher.matchesAlbum(it) }
                 val playlistHits = playlists().filter { matcher.matchesName(it.name) }
@@ -634,7 +705,7 @@ class MusicRepository internal constructor(
                     q = q,
                     artistIndex = artistIndex,
                     albumIndex = albumIndex,
-                    trackPages = trackScan.pages,
+                    trackIndexSize = trackIndex.second.size,
                     trackHits = trackHits,
                     artistHits = artistHits,
                     albumHits = albumHits,
@@ -665,26 +736,20 @@ class MusicRepository internal constructor(
      */
     suspend fun warmSearchIndex() {
         withContext(Dispatchers.Default) {
+            // 登录后一次性构建完整搜索索引（歌手/专辑/歌曲+预计算拼音），
+            // 首次搜索即命中内存索引，无需再逐页扫描与实时转拼音。
             ensureSearchIndex()
-            // 预取歌曲页（后台执行、不阻塞登录流程；搜索时会按需补齐剩余页）
-            runCatching {
-                repositoryScope.launch {
-                    scanPages(
-                        pageLoader = { page, size -> searchTracksPage(page, size) },
-                        size = SEARCH_PAGE_SIZE,
-                        startPage = 0,
-                        idOf = { it.guid.value },
-                        matches = { false },
-                    )
-                }
-            }
         }
     }
 
     private suspend fun ensureSearchIndex() {
         val namespace = session.cacheNamespace()
         searchIndexMutex.withLock {
-            if (searchArtists?.first == namespace && searchAlbums?.first == namespace) return
+            if (
+                searchArtists?.first == namespace &&
+                searchAlbums?.first == namespace &&
+                searchTrackEntries?.first == namespace
+            ) return
             searchArtists = namespace to loadFullCatalog(
                 pageLoader = { page, size -> artists(page, size) },
                 idOf = { it.guid.value },
@@ -693,7 +758,94 @@ class MusicRepository internal constructor(
                 pageLoader = { page, size -> albums(page, size) },
                 idOf = { it.guid.value },
             )
+            searchTrackEntries = namespace to buildTrackSearchEntries(namespace)
         }
+    }
+
+    /** 歌曲搜索索引条目：构建或从磁盘缓存恢复（优先缓存，跨启动秒级可用）。 */
+    private suspend fun buildTrackSearchEntries(namespace: String): List<TrackSearchEntry> {
+        // 1) 磁盘缓存优先：上次构建好的预计算拼音索引直接恢复，搜索立刻可用
+        val cached = runCatching { localStore.index(namespace, SEARCH_TRACK_INDEX_KEY) }.getOrNull()
+        if (cached != null && cached.payload.isNotBlank()) {
+            val loaded = runCatching {
+                ApiDecoder.json.decodeFromString<TrackSearchIndexDto>(cached.payload)
+                    .tracks.mapNotNull { it.toEntry() }
+            }.getOrNull()
+            if (loaded != null && loaded.isNotEmpty()) {
+                // 2) 超过刷新周期则在后台静默重建（不阻塞本次搜索）
+                val stale = now() - cached.accessedAt > SEARCH_INDEX_TTL_MS
+                if (stale) {
+                    repositoryScope.launch {
+                        runCatching { buildTrackSearchEntriesFresh(namespace) }
+                    }
+                }
+                return loaded
+            }
+        }
+        return buildTrackSearchEntriesFresh(namespace)
+    }
+
+    /** 从服务端全量拉取歌曲目录并构建预计算拼音索引，落盘 cache_index 供下次启动秒级恢复。 */
+    private suspend fun buildTrackSearchEntriesFresh(namespace: String): List<TrackSearchEntry> {
+        val tracks = loadFullCatalog(
+            pageLoader = { page, size -> searchTracksPage(page, size) },
+            idOf = { it.guid.value },
+        )
+        val entries = tracks.mapNotNull { it.toSearchEntry() }
+        if (entries.isNotEmpty()) {
+            val dto = TrackSearchIndexDto(
+                version = 1,
+                tracks = entries.map { it.toDto() },
+            )
+            runCatching {
+                localStore.saveIndex(
+                    CachedIndexEntity(
+                        namespace = namespace,
+                        indexKey = SEARCH_TRACK_INDEX_KEY,
+                        payload = ApiDecoder.json.encodeToString(dto),
+                        accessedAt = now(),
+                    ),
+                )
+            }
+        }
+        return entries
+    }
+
+    private fun Track.toSearchEntry(): TrackSearchEntry? {
+        if (title.isBlank()) return null
+        val lower = title.lowercase()
+        val idx = PinyinIndex.of(lower)
+        return TrackSearchEntry(this, lower, idx.pinyinCompact, idx.initials)
+    }
+
+    private fun TrackSearchEntry.toDto(): TrackSearchEntryDto = TrackSearchEntryDto(
+        guid = track.guid.value,
+        title = track.title,
+        artistName = track.artistName,
+        albumName = track.albumName,
+        coverId = track.coverId,
+        durationMs = track.durationMs,
+        isCue = track.isCue,
+        accessStatus = track.accessStatus,
+        audioFormat = track.audioFormat,
+        namePinyin = namePinyin,
+        nameInitials = nameInitials,
+    )
+
+    private fun TrackSearchEntryDto.toEntry(): TrackSearchEntry? {
+        if (title.isBlank()) return null
+        val track = Track(
+            guid = TrackGuid(guid),
+            title = title,
+            artistName = artistName,
+            albumName = albumName,
+            coverId = coverId,
+            durationMs = durationMs,
+            isCue = isCue,
+            accessStatus = accessStatus,
+            audioFormat = audioFormat,
+        )
+        return TrackSearchEntry(track, title.lowercase(), namePinyin, nameInitials)
     }
 
     /** 歌曲搜索结果：hits 为命中项，pages 为策略 A 扫描页数（用于诊断）。 */
@@ -816,7 +968,7 @@ class MusicRepository internal constructor(
         q: String,
         artistIndex: Pair<String, List<Artist>>,
         albumIndex: Pair<String, List<Album>>,
-        trackPages: Int,
+        trackIndexSize: Int,
         trackHits: List<Track>,
         artistHits: List<Artist>,
         albumHits: List<Album>,
@@ -824,7 +976,7 @@ class MusicRepository internal constructor(
     ): String = buildString {
         appendLine("查询：\"$q\"")
         appendLine("歌手索引 ${artistIndex.second.size} 条；专辑索引 ${albumIndex.second.size} 条")
-        appendLine("歌曲扫描 ${trackPages} 页")
+        appendLine("歌曲索引 ${trackIndexSize} 条（内存预计算拼音）")
         appendLine("命中：歌曲 ${trackHits.size}、歌手 ${artistHits.size}、专辑 ${albumHits.size}、歌单 ${playlistHits.size}")
         if (q.isNotBlank() && artistHits.isEmpty()) {
             val qInit = PinyinIndex.of(q).initials
