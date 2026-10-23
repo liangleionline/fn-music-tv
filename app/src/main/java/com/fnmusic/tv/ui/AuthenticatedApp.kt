@@ -74,6 +74,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -130,6 +133,8 @@ import com.fnmusic.tv.NowPlayingPresentation
 import com.fnmusic.tv.NowPlayingResourceState
 import com.fnmusic.tv.decodeArtwork
 import com.fnmusic.tv.core.data.repository.CurrentLyrics
+import com.fnmusic.tv.core.data.repository.FolderChildren
+import com.fnmusic.tv.core.data.repository.FolderDir
 import com.fnmusic.tv.core.data.repository.SearchResults
 import com.fnmusic.tv.core.data.repository.SessionState
 import com.fnmusic.tv.core.model.Album
@@ -260,6 +265,7 @@ internal fun AuthenticatedApp(
             onSearch = { open(LibraryRoute.Search) },
             onPlaylist = { open(LibraryRoute.PlaylistDetail(it)) },
             onFavorites = { open(LibraryRoute.Favorites) },
+            onFolders = { open(LibraryRoute.Folders) },
             onAll = { open(LibraryRoute.AllPlaylists) },
             onPlayer = { open(LibraryRoute.Player(null)) },
         )
@@ -280,6 +286,11 @@ internal fun AuthenticatedApp(
             onPlayer = { open(LibraryRoute.Player(null)) },
         )
         LibraryRoute.AllPlaylists -> AllPlaylists(container, onOpen = { open(LibraryRoute.PlaylistDetail(it)) })
+        LibraryRoute.Folders -> FolderBrowserScreen(
+            container,
+            onPlayTrack = { open(LibraryRoute.Player(it)) },
+            onBack = back,
+        )
         LibraryRoute.Search -> SearchScreen(
             container,
             onPlayTrack = { open(LibraryRoute.Player(it)) },
@@ -644,6 +655,7 @@ private fun BrowseHome(
     onSearch: () -> Unit,
     onPlaylist: (Playlist) -> Unit,
     onFavorites: () -> Unit,
+    onFolders: () -> Unit,
     onAll: () -> Unit,
     onPlayer: () -> Unit,
 ) {
@@ -660,7 +672,7 @@ private fun BrowseHome(
     val playlistsLoaded = playlistSnapshot.initialLoadCompleted
     val albums = albumState.snapshot.entries
     val favoriteTracks = favoritePreviewState.snapshot.entries
-    val roamArtwork = remember(albums, homePlaylists) {
+    val folderArtwork = remember(albums, homePlaylists) {
         featureArtworkSlots(
             primary = albums.map { FeatureArtworkItem(it.name, it.coverId) },
             fallback = homePlaylists.map { FeatureArtworkItem(it.name, it.coverId) },
@@ -671,8 +683,6 @@ private fun BrowseHome(
             primary = favoriteTracks.map { FeatureArtworkItem(it.title, it.coverId) },
         )
     }
-    var actionError by remember { mutableStateOf<AppError?>(null) }
-    var roamActionRunning by remember { mutableStateOf(false) }
     var focusedKey by rememberSaveable { mutableStateOf<String?>(null) }
     var initialFocusRequested by remember { mutableStateOf(false) }
     val contentFocus = remember { FocusRequester() }
@@ -680,7 +690,7 @@ private fun BrowseHome(
     val homeTabFocus = remember { FocusRequester() }
     val myTabFocus = remember { FocusRequester() }
     val searchFocus = remember { FocusRequester() }
-    val roamFocus = remember { FocusRequester() }
+    val foldersFocus = remember { FocusRequester() }
     val favoritesFocus = remember { FocusRequester() }
     val playlistRowFocus = remember { FocusRequester() }
     val rowState = rememberLazyListState()
@@ -703,8 +713,8 @@ private fun BrowseHome(
     LaunchedEffect(playlistsLoaded, playback.hasMedia, focusedKey) {
         if (initialFocusRequested) return@LaunchedEffect
         val availableKeys = buildList {
-            add("roam")
             add("favorites")
+            add("folders")
             if (playlistsLoaded) {
                 addAll(homePlaylists.map { "playlist:${it.guid.value}" })
                 add("all-playlists")
@@ -736,7 +746,7 @@ private fun BrowseHome(
             homeTabFocus = homeTabFocus,
             myTabFocus = myTabFocus,
             searchFocus = searchFocus,
-            contentDownFocus = roamFocus,
+            contentDownFocus = favoritesFocus,
         )
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.Bottom) {
@@ -750,51 +760,15 @@ private fun BrowseHome(
         Spacer(Modifier.height(20.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
             HomeFeatureCard(
-                title = "随机漫游",
-                kind = HomeArtworkKind.Roam,
-                artwork = roamArtwork,
-                modifier = Modifier
-                    .weight(1f)
-                    .focusProperties {
-                        up = if (playback.hasMedia) nowPlayingFocus else homeTabFocus
-                        right = favoritesFocus
-                        down = playlistRowFocus
-                    }
-                    .focusRequester(roamFocus)
-                    .then(if (focusedKey == "roam") Modifier.focusRequester(contentFocus) else Modifier)
-                    .onFocusChanged { if (it.isFocused) focusedKey = "roam" },
-                onClick = {
-                focusedKey = "roam"
-                if (playback.queueKind == QueueKind.Roam) {
-                    onPlayer()
-                    return@HomeFeatureCard
-                }
-                if (roamActionRunning || playback.roamBusy) return@HomeFeatureCard
-                roamActionRunning = true
-                scope.launch {
-                    try {
-                        if (container.playbackController.startRoam()) {
-                            actionError = null
-                            onPlayer()
-                        } else {
-                            actionError = container.playbackController.state.value.roamError ?: AppError.Unknown()
-                        }
-                    } finally {
-                        roamActionRunning = false
-                    }
-                }
-                },
-            )
-            HomeFeatureCard(
                 title = "收藏",
                 kind = HomeArtworkKind.Favorites,
                 artwork = favoriteArtwork,
                 modifier = Modifier
                     .weight(1f)
                     .focusProperties {
-                        up = myTabFocus
-                        left = roamFocus
-                        right = FocusRequester.Cancel
+                        up = if (playback.hasMedia) nowPlayingFocus else homeTabFocus
+                        left = FocusRequester.Cancel
+                        right = foldersFocus
                         down = playlistRowFocus
                     }
                     .focusRequester(favoritesFocus)
@@ -803,6 +777,26 @@ private fun BrowseHome(
                 onClick = {
                     focusedKey = "favorites"
                     onFavorites()
+                },
+            )
+            HomeFeatureCard(
+                title = "文件夹",
+                kind = HomeArtworkKind.Folders,
+                artwork = folderArtwork,
+                modifier = Modifier
+                    .weight(1f)
+                    .focusProperties {
+                        up = myTabFocus
+                        left = favoritesFocus
+                        right = FocusRequester.Cancel
+                        down = playlistRowFocus
+                    }
+                    .focusRequester(foldersFocus)
+                    .then(if (focusedKey == "folders") Modifier.focusRequester(contentFocus) else Modifier)
+                    .onFocusChanged { if (it.isFocused) focusedKey = "folders" },
+                onClick = {
+                    focusedKey = "folders"
+                    onFolders()
                 },
             )
         }
@@ -825,7 +819,7 @@ private fun BrowseHome(
                     subtitle = "歌单",
                     coverId = playlist.coverId,
                     modifier = Modifier
-                        .focusProperties { up = if (index == 0) roamFocus else favoritesFocus }
+                        .focusProperties { up = if (index == 0) favoritesFocus else foldersFocus }
                         .then(if (index == 0) Modifier.focusRequester(playlistRowFocus) else Modifier)
                         .then(if (focusedKey == key) Modifier.focusRequester(contentFocus) else Modifier)
                         .onFocusChanged { if (it.isFocused) focusedKey = key },
@@ -853,7 +847,7 @@ private fun BrowseHome(
                 )
             }
         }
-        (actionError ?: playlistSnapshot.error)?.let { InlineError(it) }
+        playlistSnapshot.error?.let { InlineError(it) }
     }
 }
 
@@ -876,6 +870,275 @@ internal fun featureArtworkSlots(
         .distinctBy { it.coverId }
         .take(limit)
         .toList()
+}
+
+/** 返回父目录路径：无分隔符返回根目录（空串），已是根目录返回空串。 */
+private fun parentPath(path: String): String {
+    if (path.isEmpty()) return ""
+    val idx = path.lastIndexOf('/')
+    return if (idx < 0) "" else path.substring(0, idx)
+}
+
+@Composable
+private fun FolderBrowserScreen(
+    container: AuthenticatedAppDependencies,
+    onPlayTrack: (Track) -> Unit,
+    onBack: () -> Unit,
+) {
+    val repository = container.musicRepository
+    var dirPath by rememberSaveable { mutableStateOf("") }
+    var children by remember { mutableStateOf<FolderChildren?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<AppError?>(null) }
+    var initialFocusRequested by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val firstDirFocus = remember { FocusRequester() }
+    val firstTrackFocus = remember { FocusRequester() }
+    val retryFocus = remember { FocusRequester() }
+
+    fun load(path: String) {
+        if (loading) return
+        loading = true
+        initialFocusRequested = false
+        scope.launch {
+            runCatching { repository.folderChildren(path) }
+                .onSuccess {
+                    children = it
+                    error = null
+                }
+                .onFailure {
+                    error = (it as? AppException)?.error ?: AppError.Unknown()
+                }
+            loading = false
+        }
+    }
+    LaunchedEffect(dirPath) { load(dirPath) }
+
+    BackHandler {
+        if (dirPath.isEmpty()) onBack() else dirPath = parentPath(dirPath)
+    }
+
+    val breadcrumb = remember(dirPath) {
+        if (dirPath.isEmpty()) {
+            "根目录"
+        } else {
+            "根目录 / " + dirPath.split('/').joinToString(" / ")
+        }
+    }
+
+    LaunchedEffect(children, loading, error) {
+        if (initialFocusRequested || loading || error != null) return@LaunchedEffect
+        val content = children ?: return@LaunchedEffect
+        if (content.dirs.isNotEmpty()) {
+            yield()
+            runCatching { firstDirFocus.requestFocus() }
+            initialFocusRequested = true
+        } else if (content.tracks.isNotEmpty()) {
+            yield()
+            runCatching { firstTrackFocus.requestFocus() }
+            initialFocusRequested = true
+        }
+    }
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 64.dp, vertical = 24.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DetailBackButton(
+                onClick = {
+                    if (dirPath.isEmpty()) onBack() else dirPath = parentPath(dirPath)
+                },
+            )
+            Spacer(Modifier.width(18.dp))
+            Text("文件夹", fontSize = 28.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(22.dp))
+            Text(breadcrumb, color = FnColors.Muted, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Spacer(Modifier.height(16.dp))
+        when {
+            loading && children == null -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("正在加载文件夹…", color = FnColors.Muted, fontSize = 17.sp)
+                }
+            }
+            error != null && children == null -> {
+                Column(
+                    Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    InlineError(error!!)
+                    Spacer(Modifier.height(16.dp))
+                    Button(
+                        onClick = { load(dirPath) },
+                        modifier = Modifier.focusRequester(retryFocus),
+                        shape = ButtonDefaults.shape(RoundedCornerShape(12.dp), RoundedCornerShape(12.dp), RoundedCornerShape(12.dp), RoundedCornerShape(12.dp), RoundedCornerShape(12.dp)),
+                        colors = ButtonDefaults.colors(
+                            containerColor = FnColors.FocusFill,
+                            contentColor = FnColors.Text,
+                            focusedContainerColor = FnColors.Coral,
+                            focusedContentColor = FnColors.Text,
+                            pressedContainerColor = FnColors.Coral,
+                            pressedContentColor = FnColors.Text,
+                        ),
+                    ) {
+                        Text("重试", fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+            else -> {
+                val content = children
+                if (content == null || loading) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("正在加载文件夹…", color = FnColors.Muted, fontSize = 17.sp)
+                    }
+                } else {
+                    val dirRows = content.dirs.chunked(4)
+                    LazyColumn(
+                        contentPadding = PaddingValues(bottom = 32.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        if (content.dirs.isNotEmpty()) {
+                            item {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("子文件夹", fontSize = 20.sp, lineHeight = 23.sp, fontWeight = FontWeight.Bold)
+                                    Spacer(Modifier.width(10.dp))
+                                    Text("${content.dirs.size} 个", color = FnColors.Muted, fontSize = 13.sp)
+                                }
+                            }
+                            dirRows.forEachIndexed { rowIndex, rowDirs ->
+                                item {
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(18.dp),
+                                    ) {
+                                        rowDirs.forEachIndexed { columnIndex, dir ->
+                                            FolderDirCard(
+                                                name = dir.name,
+                                                trackCount = dir.trackCount,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .then(
+                                                        if (rowIndex == 0 && columnIndex == 0) {
+                                                            Modifier.focusRequester(firstDirFocus)
+                                                        } else {
+                                                            Modifier
+                                                        },
+                                                    ),
+                                                onClick = { dirPath = dir.path },
+                                            )
+                                        }
+                                        repeat(4 - rowDirs.size) {
+                                            Spacer(Modifier.weight(1f))
+                                        }
+                                    }
+                                }
+                            }
+                            item { Spacer(Modifier.height(6.dp)) }
+                        }
+                        if (content.tracks.isNotEmpty()) {
+                            item {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("本目录歌曲", fontSize = 20.sp, lineHeight = 23.sp, fontWeight = FontWeight.Bold)
+                                    Spacer(Modifier.width(10.dp))
+                                    Text("${content.tracks.size} 首", color = FnColors.Muted, fontSize = 13.sp)
+                                }
+                            }
+                            item { DetailTrackColumnHeader() }
+                            itemsIndexed(content.tracks, key = { _, track -> track.guid.value }) { index, track ->
+                                DetailTrackRow(
+                                    index = index,
+                                    track = track,
+                                    enabled = true,
+                                    modifier = if (index == 0) Modifier.focusRequester(firstTrackFocus) else Modifier,
+                                    onClick = { onPlayTrack(track) },
+                                )
+                            }
+                        }
+                        if (content.dirs.isEmpty() && content.tracks.isEmpty()) {
+                            item {
+                                Box(Modifier.fillMaxWidth().padding(vertical = 64.dp), contentAlignment = Alignment.Center) {
+                                    Text("此目录为空", color = FnColors.Muted, fontSize = 17.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderDirCard(
+    name: String,
+    trackCount: Int,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(14.dp)
+    Button(
+        onClick = onClick,
+        modifier = modifier.height(92.dp).semantics { contentDescription = "文件夹 $name $trackCount 首歌曲" },
+        shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
+        scale = ButtonDefaults.scale(focusedScale = 1.02f),
+        colors = ButtonDefaults.colors(
+            containerColor = Color.Transparent,
+            contentColor = FnColors.Text,
+            focusedContainerColor = FnColors.FocusFill,
+            focusedContentColor = FnColors.Text,
+            pressedContainerColor = FnColors.FocusFill,
+            pressedContentColor = FnColors.Text,
+        ),
+        border = ButtonDefaults.border(
+            border = Border(BorderStroke(0.5.dp, Color.White.copy(alpha = 0.08f)), shape = shape),
+            focusedBorder = Border(BorderStroke(1.5.dp, FnColors.Amber), shape = shape),
+            pressedBorder = Border(BorderStroke(1.5.dp, FnColors.Amber), shape = shape),
+        ),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+    ) {
+        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(40.dp).background(FnColors.Teal.copy(alpha = 0.16f), RoundedCornerShape(11.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Canvas(Modifier.size(26.dp)) {
+                    val w = size.width
+                    val h = size.height
+                    val corner = CornerRadius(w * 0.09f, h * 0.09f)
+                    drawRoundRect(
+                        color = Color(0xFF1D4A6E),
+                        topLeft = Offset(0f, 0f),
+                        size = Size(w * 0.40f, h * 0.30f),
+                        cornerRadius = CornerRadius(w * 0.04f, h * 0.04f),
+                    )
+                    drawRoundRect(
+                        color = Color(0xFF2A5C82),
+                        topLeft = Offset(0f, h * 0.18f),
+                        size = Size(w, h * 0.82f),
+                        cornerRadius = corner,
+                    )
+                    drawRoundRect(
+                        color = Color.White.copy(alpha = 0.14f),
+                        topLeft = Offset(0f, h * 0.18f),
+                        size = Size(w, h * 0.26f),
+                        cornerRadius = corner,
+                    )
+                }
+            }
+            Spacer(Modifier.width(13.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    name,
+                    fontSize = 16.sp,
+                    lineHeight = 19.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(3.dp))
+                Text("$trackCount 首歌曲", color = FnColors.Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
 }
 
 /**
@@ -910,6 +1173,9 @@ private fun HomeFeatureCard(
         )
         HomeArtworkKind.Favorites -> Brush.linearGradient(
             listOf(Color(0xFF1C1114), Color(0xFF331A1B), Color(0xFF271319)),
+        )
+        HomeArtworkKind.Folders -> Brush.linearGradient(
+            listOf(Color(0xFF0C1B2A), Color(0xFF16354E), Color(0xFF112A40)),
         )
         HomeArtworkKind.Collection,
         HomeArtworkKind.PlaylistGrid,
@@ -1010,7 +1276,7 @@ private fun FeatureCoverDeck(
                 } else {
                     InitialArtworkPlaceholder(
                         text = item.title,
-                        accent = if (kind == HomeArtworkKind.Roam) FnColors.Teal else FnColors.Coral,
+                        accent = if (kind == HomeArtworkKind.Roam || kind == HomeArtworkKind.Folders) FnColors.Teal else FnColors.Coral,
                         modifier = Modifier.fillMaxSize(),
                         shape = artworkShape,
                     )
@@ -1050,6 +1316,7 @@ private fun deckPlacements(kind: HomeArtworkKind, artworkCount: Int): List<DeckP
         }
         HomeArtworkKind.Collection,
         HomeArtworkKind.PlaylistGrid,
+        HomeArtworkKind.Folders,
         -> emptyList()
     }
 
@@ -1062,7 +1329,7 @@ private data class DeckPlacement(
 
 @Composable
 private fun FeatureGlyph(kind: HomeArtworkKind, modifier: Modifier = Modifier) {
-    val accent = if (kind == HomeArtworkKind.Roam) FnColors.Teal else FnColors.Coral
+    val accent = if (kind == HomeArtworkKind.Roam || kind == HomeArtworkKind.Folders) FnColors.Teal else FnColors.Coral
     Box(
         modifier
             .background(Color(0xFF0E1314).copy(alpha = 0.92f), CircleShape)
@@ -3327,7 +3594,7 @@ private fun PlaylistTileArtwork(
     }
 }
 
-private enum class HomeArtworkKind { Roam, Favorites, Collection, PlaylistGrid }
+private enum class HomeArtworkKind { Roam, Favorites, Collection, PlaylistGrid, Folders }
 
 @Composable
 private fun HomeFeatureArtwork(kind: HomeArtworkKind, modifier: Modifier) {
@@ -3575,6 +3842,74 @@ private fun HomeFeatureArtwork(kind: HomeArtworkKind, modifier: Modifier) {
                         )
                     }
                 }
+            }
+
+            HomeArtworkKind.Folders -> {
+                drawRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(Color(0xFF16354E), Color(0xFF1D4A6E), Color(0xFF12405F)),
+                        start = point(0f, 0.05f),
+                        end = point(1f, 0.95f),
+                    ),
+                )
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFF8FD6FF).copy(alpha = 0.25f), Color.Transparent),
+                        center = point(0.85f, 0.15f),
+                        radius = shortEdge * 0.80f,
+                    ),
+                    radius = shortEdge * 0.80f,
+                    center = point(0.85f, 0.15f),
+                )
+                val folderEdge = size.height * 0.66f
+                val folderLeft = (size.width - folderEdge * 1.18f) / 2f
+                val folderTop = size.height * 0.17f
+                val folderBack = androidx.compose.ui.geometry.Rect(
+                    folderLeft,
+                    folderTop,
+                    folderLeft + folderEdge * 1.18f,
+                    folderTop + folderEdge,
+                )
+                val corner = androidx.compose.ui.geometry.CornerRadius(shortEdge * 0.055f)
+                // 文件夹背面阴影
+                drawRoundRect(
+                    color = Color.Black.copy(alpha = 0.20f),
+                    topLeft = androidx.compose.ui.geometry.Offset(folderLeft + shortEdge * 0.03f, folderTop + shortEdge * 0.05f),
+                    size = androidx.compose.ui.geometry.Size(folderBack.width, folderBack.height),
+                    cornerRadius = corner,
+                )
+                // 文件夹主卡
+                drawRoundRect(
+                    color = Color(0xFF2A5C82),
+                    topLeft = androidx.compose.ui.geometry.Offset(folderLeft, folderTop),
+                    size = androidx.compose.ui.geometry.Size(folderBack.width, folderBack.height),
+                    cornerRadius = corner,
+                )
+                // 文件夹标签（背面凸出）
+                drawRoundRect(
+                    color = Color(0xFF1D4A6E),
+                    topLeft = androidx.compose.ui.geometry.Offset(folderLeft + folderEdge * 0.20f, folderTop - shortEdge * 0.045f),
+                    size = androidx.compose.ui.geometry.Size(folderEdge * 0.42f, shortEdge * 0.09f),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(shortEdge * 0.02f),
+                )
+                // 文件夹正面的唱片碟片
+                val discCenter = androidx.compose.ui.geometry.Offset(
+                    folderLeft + folderBack.width * 0.52f,
+                    folderTop + folderBack.height * 0.52f,
+                )
+                drawCircle(Color.Black.copy(alpha = 0.18f), folderEdge * 0.26f, discCenter + point(0.01f, 0.02f))
+                drawVinyl(discCenter, folderEdge * 0.25f, FnColors.Coral)
+                // 文件夹高光
+                drawRoundRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(Color.White.copy(alpha = 0.16f), Color.Transparent),
+                        start = androidx.compose.ui.geometry.Offset(folderLeft, folderTop),
+                        end = androidx.compose.ui.geometry.Offset(folderLeft + folderBack.width * 0.55f, folderTop + folderBack.height),
+                    ),
+                    topLeft = androidx.compose.ui.geometry.Offset(folderLeft, folderTop),
+                    size = androidx.compose.ui.geometry.Size(folderBack.width, folderBack.height),
+                    cornerRadius = corner,
+                )
             }
         }
     }

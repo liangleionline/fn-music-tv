@@ -95,6 +95,31 @@ data class SearchResults(
     val isEmpty: Boolean get() = tracks.isEmpty() && artists.isEmpty() && playlists.isEmpty() && albums.isEmpty()
 }
 
+/** 文件夹浏览结果：当前目录下的子目录与歌曲。 */
+data class FolderChildren(
+    val dirs: List<FolderDir> = emptyList(),
+    val tracks: List<Track> = emptyList(),
+)
+
+/** 一个音乐库子目录：path 为相对音乐库根目录的完整路径，trackCount 为包含子目录在内的累计歌曲数。 */
+data class FolderDir(
+    val path: String,
+    val name: String,
+    val trackCount: Int,
+)
+
+/** 文件夹树的内存索引项：歌曲与其所在目录（相对音乐库根目录）。 */
+private data class TrackFolderEntry(
+    val track: Track,
+    val dirPath: String,
+)
+
+/** 已构建的文件夹树：全部条目 + 每个目录（含祖先）的累计歌曲数。 */
+private class FolderTree(
+    val entries: List<TrackFolderEntry>,
+    val dirCounts: Map<String, Int>,
+)
+
 /** 基于汉字拼音的搜索匹配器，支持中文子串、拼音全拼与拼音首字母。 */
 private class SearchMatcher(private val query: String) {
     private val qLower = query.lowercase()
@@ -391,11 +416,14 @@ class MusicRepository internal constructor(
     )
     private val favoriteMutationMutex = Mutex()
     private val searchIndexMutex = Mutex()
+    private val folderIndexMutex = Mutex()
     /** 歌曲搜索索引（预计算拼音，内存），按登录账号缓存；登录后由 warmSearchIndex() 后台构建，搜索时按需补齐。 */
     private var searchTrackEntries: Pair<String, List<TrackSearchEntry>>? = null
     /** 全量歌手/专辑搜索索引，按登录账号缓存；登录后由 warmSearchIndex() 后台预热，搜索时按需补齐。 */
     private var searchArtists: Pair<String, List<Artist>>? = null
     private var searchAlbums: Pair<String, List<Album>>? = null
+    /** 文件夹树索引（由曲目 audioSpec.path 构建），按登录账号缓存。 */
+    private var folderIndex: Pair<String, FolderTree>? = null
     /** 最近一次搜索的诊断信息（查询、索引规模、命中数、近似候选），用于排查“搜不到”；由 App 层写入崩溃日志文件。 */
     @Volatile
     private var lastSearchDiagnostics: String? = null
@@ -740,6 +768,76 @@ class MusicRepository internal constructor(
             // 首次搜索即命中内存索引，无需再逐页扫描与实时转拼音。
             ensureSearchIndex()
         }
+    }
+
+    /**
+     * 按文件夹浏览音乐库：服务端没有独立的目录接口，目录树完全由客户端从
+     * 每首歌的 audioSpec.path 构建（剥离 NAS 系统前缀 /Resources/Media/Music/，
+     * 按路径分段成目录层级）。返回指定目录下的子目录与歌曲；目录树按账号缓存，
+     * 首次构建后各层浏览均为纯内存过滤。
+     */
+    suspend fun folderChildren(dirPath: String): FolderChildren {
+        val namespace = session.cacheNamespace()
+        val tree = folderIndexMutex.withLock {
+            if (folderIndex?.first != namespace) {
+                val tracks = loadFullCatalog(
+                    pageLoader = { page, size -> searchTracksPage(page, size) },
+                    idOf = { it.guid.value },
+                )
+                folderIndex = namespace to buildFolderTree(tracks)
+            }
+            folderIndex!!.second
+        }
+        val prefix = if (dirPath.isEmpty()) "" else "$dirPath/"
+        val dirs = LinkedHashMap<String, FolderDir>()
+        val tracks = ArrayList<Track>()
+        for (entry in tree.entries) {
+            when {
+                entry.dirPath == dirPath -> tracks.add(entry.track)
+                entry.dirPath.startsWith(prefix) && entry.dirPath.length > prefix.length -> {
+                    val rest = entry.dirPath.substring(prefix.length)
+                    val first = rest.substringBefore('/')
+                    if (first.isNotEmpty()) {
+                        val full = prefix + first
+                        dirs.putIfAbsent(first, FolderDir(full, first, tree.dirCounts[full] ?: 0))
+                    }
+                }
+            }
+        }
+        return FolderChildren(
+            dirs = dirs.values.sortedBy { it.name.lowercase() },
+            tracks = tracks.sortedBy { it.title.lowercase() },
+        )
+    }
+
+    private fun buildFolderTree(tracks: List<Track>): FolderTree {
+        val entries = ArrayList<TrackFolderEntry>(tracks.size)
+        val direct = HashMap<String, Int>()
+        for (track in tracks) {
+            val raw = track.folderPath?.trim()?.takeIf { it.isNotEmpty() } ?: continue
+            val marker = "/Resources/Media/Music/"
+            val idx = raw.indexOf(marker)
+            val rel = (if (idx >= 0) raw.substring(idx + marker.length) else raw.trim('/')).trim('/')
+            if (rel.isBlank()) continue
+            val segments = rel.split('/').filter { it.isNotEmpty() }
+            if (segments.isEmpty()) continue
+            // 最后一个段是文件名，之前的段是目录层级
+            val dirPath = segments.dropLast(1).joinToString("/")
+            entries.add(TrackFolderEntry(track, dirPath))
+            direct[dirPath] = (direct[dirPath] ?: 0) + 1
+        }
+        // 累计歌曲数：每个目录把自身与所有祖先目录各加一次
+        val total = HashMap<String, Int>()
+        for ((dir, count) in direct) {
+            var p = dir
+            while (true) {
+                total[p] = (total[p] ?: 0) + count
+                val slash = p.lastIndexOf('/')
+                if (slash < 0) break
+                p = p.substring(0, slash)
+            }
+        }
+        return FolderTree(entries, total)
     }
 
     private suspend fun ensureSearchIndex() {

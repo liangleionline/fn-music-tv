@@ -91,6 +91,7 @@ data class AudioSpecDto(
     val container: String = "",
     val duration: Long = 0,
     val bitrate: Long = 0,
+    val path: String = "",
 ) {
     fun displayFormat(): String? = container.ifBlank { codec }.trim().uppercase().takeIf(String::isNotBlank)
 }
@@ -119,6 +120,7 @@ data class TrackDto(
         accessStatus = accessStatus,
         audioFormat = sourceAudioSpec.displayFormat(),
         isFavorite = isFavorite,
+        folderPath = sourceAudioSpec.path.trim().takeIf { it.isNotEmpty() },
     )
 }
 
