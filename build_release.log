@@ -1,0 +1,268 @@
+﻿> Task :core:playback:preBuild UP-TO-DATE
+> Task :third_party:accompanist-lyrics-ui:preBuild UP-TO-DATE
+> Task :core:data:preBuild UP-TO-DATE
+> Task :third_party:gaze-capsule:preBuild UP-TO-DATE
+> Task :core:model:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :core:lyrics:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :core:data:preReleaseBuild UP-TO-DATE
+> Task :third_party:accompanist-lyrics-ui:preReleaseBuild UP-TO-DATE
+> Task :core:playback:preReleaseBuild UP-TO-DATE
+> Task :third_party:gaze-capsule:preReleaseBuild UP-TO-DATE
+> Task :third_party:accompanist-lyrics-ui:mergeReleaseJniLibFolders UP-TO-DATE
+> Task :core:data:mergeReleaseJniLibFolders UP-TO-DATE
+> Task :core:playback:mergeReleaseJniLibFolders UP-TO-DATE
+> Task :third_party:accompanist-lyrics-ui:mergeReleaseNativeLibs NO-SOURCE
+> Task :third_party:gaze-capsule:mergeReleaseJniLibFolders UP-TO-DATE
+> Task :core:playback:mergeReleaseNativeLibs NO-SOURCE
+> Task :core:data:mergeReleaseNativeLibs NO-SOURCE
+> Task :core:playback:copyReleaseJniLibsProjectOnly UP-TO-DATE
+> Task :core:playback:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :core:data:copyReleaseJniLibsProjectOnly UP-TO-DATE
+> Task :third_party:gaze-capsule:mergeReleaseNativeLibs NO-SOURCE
+> Task :third_party:accompanist-lyrics-ui:copyReleaseJniLibsProjectOnly UP-TO-DATE
+> Task :core:data:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :core:playback:generateReleaseResValues UP-TO-DATE
+> Task :third_party:accompanist-lyrics-ui:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :third_party:gaze-capsule:copyReleaseJniLibsProjectOnly UP-TO-DATE
+> Task :core:playback:generateReleaseResources UP-TO-DATE
+> Task :third_party:accompanist-lyrics-ui:generateReleaseResValues UP-TO-DATE
+> Task :app:verifyFlacDecoderArtifact
+> Task :third_party:gaze-capsule:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:preBuild
+> Task :app:preSideloadReleaseBuild
+> Task :third_party:gaze-capsule:generateReleaseResValues UP-TO-DATE
+> Task :third_party:accompanist-lyrics-ui:generateReleaseResources UP-TO-DATE
+> Task :core:playback:packageReleaseResources UP-TO-DATE
+> Task :third_party:gaze-capsule:generateReleaseResources UP-TO-DATE
+> Task :app:mergeSideloadReleaseJniLibFolders UP-TO-DATE
+> Task :third_party:accompanist-lyrics-ui:packageReleaseResources UP-TO-DATE
+> Task :core:playback:processReleaseNavigationResources UP-TO-DATE
+> Task :app:buildKotlinToolingMetadata UP-TO-DATE
+> Task :third_party:accompanist-lyrics-ui:processReleaseNavigationResources UP-TO-DATE
+> Task :core:data:generateFnConnectPayload
+> Task :core:data:generateReleaseResValues UP-TO-DATE
+> Task :third_party:gaze-capsule:packageReleaseResources UP-TO-DATE
+> Task :core:data:generateReleaseResources UP-TO-DATE
+> Task :third_party:gaze-capsule:processReleaseNavigationResources UP-TO-DATE
+> Task :core:data:packageReleaseResources UP-TO-DATE
+> Task :core:data:processReleaseNavigationResources UP-TO-DATE
+> Task :third_party:accompanist-lyrics-ui:parseReleaseLocalResources UP-TO-DATE
+> Task :third_party:accompanist-lyrics-ui:generateReleaseRFile UP-TO-DATE
+> Task :third_party:gaze-capsule:parseReleaseLocalResources UP-TO-DATE
+> Task :third_party:accompanist-lyrics-ui:javaPreCompileRelease UP-TO-DATE
+> Task :core:playback:parseReleaseLocalResources UP-TO-DATE
+> Task :third_party:gaze-capsule:generateReleaseRFile UP-TO-DATE
+> Task :core:data:parseReleaseLocalResources UP-TO-DATE
+> Task :core:playback:generateReleaseRFile UP-TO-DATE
+> Task :core:data:generateReleaseRFile UP-TO-DATE
+> Task :core:data:verifyFnConnectReleaseConfiguration
+> Task :third_party:accompanist-lyrics-ui:writeReleaseAarMetadata
+> Task :core:playback:javaPreCompileRelease FROM-CACHE
+> Task :third_party:accompanist-lyrics-ui:extractDeepLinksRelease FROM-CACHE
+> Task :core:playback:writeReleaseAarMetadata
+> Task :core:playback:extractDeepLinksRelease FROM-CACHE
+> Task :third_party:accompanist-lyrics-ui:processReleaseManifest FROM-CACHE
+> Task :third_party:accompanist-lyrics-ui:prepareReleaseArtProfile
+> Task :core:playback:processReleaseManifest FROM-CACHE
+> Task :core:playback:prepareReleaseArtProfile
+> Task :third_party:accompanist-lyrics-ui:mergeReleaseShaders
+> Task :third_party:accompanist-lyrics-ui:compileReleaseShaders NO-SOURCE
+> Task :third_party:accompanist-lyrics-ui:generateReleaseAssets UP-TO-DATE
+> Task :core:playback:mergeReleaseShaders
+> Task :third_party:accompanist-lyrics-ui:mergeReleaseAssets
+> Task :core:playback:compileReleaseShaders NO-SOURCE
+> Task :core:playback:generateReleaseAssets UP-TO-DATE
+> Task :core:playback:mergeReleaseAssets
+> Task :core:model:compileKotlin UP-TO-DATE
+> Task :core:lyrics:compileKotlin UP-TO-DATE
+> Task :core:lyrics:compileJava NO-SOURCE
+> Task :core:model:compileJava NO-SOURCE
+> Task :core:lyrics:processResources NO-SOURCE
+> Task :core:model:processResources NO-SOURCE
+> Task :core:lyrics:classes UP-TO-DATE
+> Task :third_party:accompanist-lyrics-ui:extractProguardFiles
+> Task :core:model:classes UP-TO-DATE
+> Task :core:playback:extractProguardFiles
+> Task :core:lyrics:jar UP-TO-DATE
+> Task :core:model:jar UP-TO-DATE
+> Task :third_party:accompanist-lyrics-ui:stripReleaseDebugSymbols NO-SOURCE
+> Task :third_party:accompanist-lyrics-ui:copyReleaseJniLibsProjectAndLocalJars
+> Task :third_party:accompanist-lyrics-ui:prepareLintJarForPublish
+> Task :core:playback:prepareLintJarForPublish
+> Task :third_party:accompanist-lyrics-ui:extractDeepLinksForAarRelease
+> Task :third_party:accompanist-lyrics-ui:writeReleaseLintModelMetadata
+> Task :core:data:javaPreCompileRelease FROM-CACHE
+> Task :core:playback:compileReleaseKotlin UP-TO-DATE
+> Task :core:playback:compileReleaseJavaWithJavac NO-SOURCE
+> Task :core:playback:mergeReleaseGeneratedProguardFiles
+> Task :core:playback:exportReleaseConsumerProguardFiles
+> Task :core:playback:processReleaseJavaRes
+> Task :core:playback:bundleLibRuntimeToJarRelease
+> Task :core:playback:bundleLibCompileToJarRelease
+> Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :third_party:gaze-capsule:compileReleaseKotlin UP-TO-DATE
+> Task :third_party:gaze-capsule:javaPreCompileRelease FROM-CACHE
+> Task :app:generateSideloadReleaseBuildConfig
+> Task :third_party:gaze-capsule:compileReleaseJavaWithJavac NO-SOURCE
+> Task :third_party:gaze-capsule:mergeReleaseGeneratedProguardFiles
+> Task :third_party:gaze-capsule:exportReleaseConsumerProguardFiles
+> Task :third_party:gaze-capsule:writeReleaseAarMetadata
+> Task :third_party:gaze-capsule:extractDeepLinksRelease FROM-CACHE
+> Task :app:mergeSideloadReleaseNativeLibs
+> Task :app:processSideloadReleaseNavigationResources
+> Task :third_party:gaze-capsule:bundleLibCompileToJarRelease
+> Task :app:compileSideloadReleaseNavigationResources FROM-CACHE
+> Task :third_party:gaze-capsule:processReleaseManifest FROM-CACHE
+> Task :app:generateSideloadReleaseResValues FROM-CACHE
+> Task :third_party:gaze-capsule:prepareReleaseArtProfile
+
+> Task :app:stripSideloadReleaseDebugSymbols
+Unable to strip the following libraries, packaging them as they are: libandroidx.graphics.path.so, libdatastore_shared_counter.so, libflacJNI.so. Run with --info option to learn more.
+
+> Task :app:mapSideloadReleaseSourceSetPaths
+> Task :app:checkSideloadReleaseDuplicateClasses
+> Task :third_party:gaze-capsule:processReleaseJavaRes
+> Task :app:generateSideloadReleaseResources FROM-CACHE
+> Task :third_party:gaze-capsule:bundleLibRuntimeToJarRelease
+> Task :core:data:writeReleaseAarMetadata
+> Task :core:data:extractDeepLinksRelease FROM-CACHE
+> Task :core:data:processReleaseManifest FROM-CACHE
+> Task :core:data:prepareReleaseArtProfile
+> Task :app:extractSideloadReleaseNativeSymbolTables
+> Task :core:data:mergeReleaseShaders
+> Task :third_party:gaze-capsule:mergeReleaseShaders
+> Task :third_party:gaze-capsule:compileReleaseShaders NO-SOURCE
+> Task :core:data:compileReleaseShaders NO-SOURCE
+> Task :core:data:generateReleaseAssets UP-TO-DATE
+> Task :third_party:gaze-capsule:generateReleaseAssets UP-TO-DATE
+> Task :core:data:mergeReleaseAssets
+> Task :core:data:extractProguardFiles
+> Task :core:data:prepareLintJarForPublish
+> Task :third_party:gaze-capsule:mergeReleaseAssets
+> Task :third_party:gaze-capsule:createFullJarRelease
+> Task :third_party:gaze-capsule:extractProguardFiles
+> Task :core:data:stripReleaseDebugSymbols NO-SOURCE
+> Task :core:data:copyReleaseJniLibsProjectAndLocalJars
+> Task :core:data:extractDeepLinksForAarRelease FROM-CACHE
+> Task :core:data:checkReleaseAarMetadata
+> Task :core:data:writeReleaseLintModelMetadata
+> Task :third_party:accompanist-lyrics-ui:checkReleaseAarMetadata
+> Task :core:playback:generateReleaseLintModel
+> Task :core:playback:createFullJarRelease
+> Task :core:playback:stripReleaseDebugSymbols NO-SOURCE
+> Task :core:playback:copyReleaseJniLibsProjectAndLocalJars
+> Task :core:playback:extractDeepLinksForAarRelease FROM-CACHE
+> Task :core:playback:checkReleaseAarMetadata
+> Task :third_party:gaze-capsule:generateReleaseLintModel
+> Task :third_party:gaze-capsule:prepareLintJarForPublish
+> Task :third_party:gaze-capsule:stripReleaseDebugSymbols NO-SOURCE
+> Task :third_party:gaze-capsule:copyReleaseJniLibsProjectAndLocalJars
+> Task :third_party:gaze-capsule:extractDeepLinksForAarRelease FROM-CACHE
+> Task :third_party:gaze-capsule:checkReleaseAarMetadata
+> Task :app:mergeSideloadReleaseNativeDebugMetadata NO-SOURCE
+> Task :app:checkSideloadReleaseAarMetadata
+> Task :app:packageSideloadReleaseResources
+> Task :app:parseSideloadReleaseLocalResources FROM-CACHE
+> Task :app:createSideloadReleaseCompatibleScreenManifests
+> Task :app:extractDeepLinksSideloadRelease
+> Task :app:processSideloadReleaseMainManifest
+> Task :app:processSideloadReleaseManifest
+> Task :app:javaPreCompileSideloadRelease FROM-CACHE
+> Task :app:extractProguardFiles
+> Task :app:mergeSideloadReleaseStartupProfile
+> Task :app:mergeSideloadReleaseShaders
+> Task :app:compileSideloadReleaseShaders NO-SOURCE
+> Task :app:generateSideloadReleaseAssets UP-TO-DATE
+> Task :app:mergeSideloadReleaseArtProfile
+> Task :app:mergeSideloadReleaseAssets
+> Task :app:compressSideloadReleaseAssets
+
+> Task :third_party:accompanist-lyrics-ui:compileReleaseKotlin
+w: file:///C:/Users/liang/Doubao/chats/2026-10-23/new-chat-1/fn-music-tv/third_party/accompanist-lyrics-ui/src/main/java/com/mocharealm/accompanist/lyrics/ui/composable/lyrics/KaraokeLyricsView.kt:315:61 Redundant call of conversion method.
+w: file:///C:/Users/liang/Doubao/chats/2026-10-23/new-chat-1/fn-music-tv/third_party/accompanist-lyrics-ui/src/main/java/com/mocharealm/accompanist/lyrics/ui/utils/String.kt:94:9 Java type mismatch: inferred type is 'Character.UnicodeBlock?', but 'Character.UnicodeBlock' was expected.
+w: file:///C:/Users/liang/Doubao/chats/2026-10-23/new-chat-1/fn-music-tv/third_party/accompanist-lyrics-ui/src/main/java/com/mocharealm/accompanist/lyrics/ui/utils/String.kt:102:9 Java type mismatch: inferred type is 'Character.UnicodeBlock?', but 'Character.UnicodeBlock' was expected.
+w: file:///C:/Users/liang/Doubao/chats/2026-10-23/new-chat-1/fn-music-tv/third_party/accompanist-lyrics-ui/src/main/java/com/mocharealm/accompanist/lyrics/ui/utils/String.kt:110:9 Java type mismatch: inferred type is 'Character.UnicodeBlock?', but 'Character.UnicodeBlock' was expected.
+
+> Task :third_party:accompanist-lyrics-ui:compileReleaseJavaWithJavac NO-SOURCE
+> Task :third_party:accompanist-lyrics-ui:mergeReleaseGeneratedProguardFiles
+> Task :third_party:accompanist-lyrics-ui:exportReleaseConsumerProguardFiles
+> Task :third_party:accompanist-lyrics-ui:processReleaseJavaRes
+> Task :third_party:accompanist-lyrics-ui:bundleLibCompileToJarRelease
+> Task :third_party:accompanist-lyrics-ui:bundleLibRuntimeToJarRelease
+> Task :app:extractSideloadReleaseVersionControlInfo
+> Task :app:collectSideloadReleaseDependencies
+> Task :third_party:accompanist-lyrics-ui:generateReleaseLintModel
+> Task :third_party:accompanist-lyrics-ui:createFullJarRelease
+> Task :app:sdkSideloadReleaseDependencyData
+> Task :app:validateSigningSideloadRelease
+> Task :app:verifyReleaseSigning
+> Task :app:verifySideloadUpdateConfiguration
+> Task :app:writeSideloadReleaseAppMetadata
+> Task :app:writeSideloadReleaseSigningConfigVersions
+> Task :app:processSideloadReleaseManifestForPackage
+> Task :app:mergeSideloadReleaseResources
+> Task :core:data:kspReleaseKotlin
+> Task :app:processSideloadReleaseResources
+> Task :core:data:compileReleaseKotlin
+> Task :core:data:compileReleaseJavaWithJavac NO-SOURCE
+> Task :core:data:copyRoomSchemas NO-SOURCE
+> Task :core:data:mergeReleaseGeneratedProguardFiles
+> Task :core:data:exportReleaseConsumerProguardFiles
+> Task :core:data:processReleaseJavaRes
+> Task :core:data:generateReleaseLintModel
+> Task :core:data:bundleLibRuntimeToJarRelease
+> Task :core:data:bundleLibCompileToJarRelease
+> Task :core:playback:extractReleaseAnnotations
+> Task :core:data:extractReleaseAnnotations
+> Task :third_party:gaze-capsule:extractReleaseAnnotations
+> Task :third_party:accompanist-lyrics-ui:extractReleaseAnnotations
+> Task :core:playback:mergeReleaseConsumerProguardFiles
+> Task :third_party:gaze-capsule:mergeReleaseConsumerProguardFiles
+> Task :third_party:accompanist-lyrics-ui:mergeReleaseConsumerProguardFiles
+> Task :third_party:gaze-capsule:writeReleaseLintModelMetadata
+> Task :third_party:accompanist-lyrics-ui:mergeReleaseJavaResource
+> Task :core:playback:mergeReleaseJavaResource
+> Task :third_party:gaze-capsule:mergeReleaseJavaResource
+> Task :core:data:createFullJarRelease
+> Task :third_party:accompanist-lyrics-ui:generateReleaseLintVitalModel
+> Task :core:data:mergeReleaseConsumerProguardFiles
+> Task :core:data:mergeReleaseJavaResource
+> Task :third_party:gaze-capsule:syncReleaseLibJars
+> Task :third_party:accompanist-lyrics-ui:syncReleaseLibJars
+> Task :third_party:gaze-capsule:bundleReleaseLocalLintAar
+> Task :third_party:accompanist-lyrics-ui:bundleReleaseLocalLintAar
+> Task :core:playback:syncReleaseLibJars
+> Task :third_party:gaze-capsule:generateReleaseLintVitalModel
+> Task :core:playback:bundleReleaseLocalLintAar
+> Task :core:playback:writeReleaseLintModelMetadata
+> Task :core:playback:generateReleaseLintVitalModel
+> Task :core:data:syncReleaseLibJars
+> Task :core:data:bundleReleaseLocalLintAar
+> Task :core:data:generateReleaseLintVitalModel
+> Task :app:compileSideloadReleaseKotlin
+> Task :app:compileSideloadReleaseJavaWithJavac
+> Task :app:mergeSideloadReleaseGeneratedProguardFiles
+> Task :app:processSideloadReleaseJavaRes
+> Task :third_party:gaze-capsule:lintVitalAnalyzeRelease
+> Task :third_party:accompanist-lyrics-ui:lintVitalAnalyzeRelease
+> Task :app:mergeSideloadReleaseJavaResource
+> Task :app:expandSideloadReleaseArtProfileWildcards
+> Task :core:playback:lintVitalAnalyzeRelease
+> Task :core:data:lintVitalAnalyzeRelease
+> Task :app:generateSideloadReleaseLintVitalReportModel
+> Task :app:produceSideloadReleaseComposeMapping
+> Task :app:reportSideloadReleaseComposeMappingErrors
+> Task :app:minifySideloadReleaseWithR8
+> Task :app:lintVitalAnalyzeSideloadRelease
+> Task :app:mergeSideloadReleaseComposeMapping
+> Task :app:convertShrunkResourcesToBinarySideloadRelease
+> Task :app:compileSideloadReleaseArtProfile
+> Task :app:optimizeSideloadReleaseResources
+> Task :app:lintVitalReportSideloadRelease
+> Task :app:lintVitalSideloadRelease
+> Task :app:packageSideloadRelease
+> Task :app:createSideloadReleaseApkListingFileRedirect
+> Task :app:assembleSideloadRelease
+
+BUILD SUCCESSFUL in 2m 9s
+208 actionable tasks: 148 executed, 19 from cache, 41 up-to-date

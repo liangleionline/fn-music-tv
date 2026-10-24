@@ -60,6 +60,28 @@ data class CachedIndexEntity(
     val accessedAt: Long,
 )
 
+/**
+ * 歌曲搜索/文件夹索引（结构化行，代替大 JSON 缓存）：
+ * SQLite 直读 1 万+ 行为秒级，而 4~8MB 的 JSON 字符串在低端电视上编解码需要数十秒。
+ */
+@Entity(tableName = "track_index", primaryKeys = ["namespace", "guid"])
+data class TrackIndexEntity(
+    val namespace: String,
+    val guid: String,
+    val title: String,
+    val artistName: String?,
+    val albumName: String?,
+    val coverId: String?,
+    val durationMs: Long?,
+    val isCue: Boolean,
+    val accessStatus: Int?,
+    val audioFormat: String?,
+    val folderPath: String?,
+    val namePinyin: String,
+    val nameInitials: String,
+    val updatedAt: Long,
+)
+
 @Dao
 interface AppDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
@@ -153,6 +175,24 @@ interface AppDao {
     @Query("DELETE FROM cache_index WHERE rowid IN (SELECT rowid FROM cache_index ORDER BY accessedAt ASC LIMIT :count)")
     suspend fun evictOldestIndexes(count: Int): Int
 
+    @Query("DELETE FROM cache_index WHERE namespace = :namespace AND indexKey = :indexKey")
+    suspend fun deleteIndex(namespace: String, indexKey: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertTrackIndexes(entities: List<TrackIndexEntity>)
+
+    @Query("SELECT * FROM track_index WHERE namespace = :namespace")
+    suspend fun trackIndexes(namespace: String): List<TrackIndexEntity>
+
+    @Query("SELECT COUNT(*) FROM track_index WHERE namespace = :namespace")
+    suspend fun trackIndexCount(namespace: String): Int
+
+    @Query("DELETE FROM track_index WHERE namespace = :namespace")
+    suspend fun deleteTrackIndexes(namespace: String)
+
+    @Query("DELETE FROM track_index")
+    suspend fun deleteAllTrackIndexes()
+
     @Query("DELETE FROM cache_page WHERE namespace = :namespace")
     suspend fun deletePages(namespace: String)
 
@@ -188,8 +228,9 @@ interface AppDao {
         CachedLyricEntity::class,
         CachedMatchedLyricEntity::class,
         CachedIndexEntity::class,
+        TrackIndexEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -223,9 +264,35 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS track_index (" +
+                        "namespace TEXT NOT NULL, " +
+                        "guid TEXT NOT NULL, " +
+                        "title TEXT NOT NULL, " +
+                        "artistName TEXT, " +
+                        "albumName TEXT, " +
+                        "coverId TEXT, " +
+                        "durationMs INTEGER, " +
+                        "isCue INTEGER NOT NULL, " +
+                        "accessStatus INTEGER, " +
+                        "audioFormat TEXT, " +
+                        "folderPath TEXT, " +
+                        "namePinyin TEXT NOT NULL, " +
+                        "nameInitials TEXT NOT NULL, " +
+                        "updatedAt INTEGER NOT NULL, " +
+                        "PRIMARY KEY(namespace, guid))",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS idx_track_index_namespace ON track_index(namespace)",
+                )
+            }
+        }
+
         fun create(context: Context): AppDatabase = Room.databaseBuilder(context, AppDatabase::class.java, NAME)
             .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
             .addCallback(object : Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {
                     val autoVacuum = db.query("PRAGMA auto_vacuum").use { cursor ->

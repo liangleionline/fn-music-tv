@@ -79,11 +79,24 @@ class LocalStore(context: Context, val database: AppDatabase = AppDatabase.creat
         recordEvictableWrite(entity.payload)
     }
 
+    suspend fun deleteIndex(namespace: String, key: String) = dao.deleteIndex(namespace, key)
+
+    /** 歌曲索引结构化落盘（SQLite 直读，秒级）。 */
+    suspend fun saveTrackIndexes(namespace: String, entities: List<TrackIndexEntity>) {
+        if (entities.isEmpty()) return
+        dao.upsertTrackIndexes(entities)
+    }
+
+    suspend fun trackIndexes(namespace: String): List<TrackIndexEntity> = dao.trackIndexes(namespace)
+
+    suspend fun trackIndexCount(namespace: String): Int = dao.trackIndexCount(namespace)
+
     suspend fun clearNamespace(namespace: String, includeEssential: Boolean) = budgetMutex.withLock {
         dao.deletePages(namespace)
         dao.deleteLyrics(namespace)
         dao.deleteMatchedLyrics(namespace)
         dao.deleteIndexes(namespace)
+        dao.deleteTrackIndexes(namespace)
         if (includeEssential) dao.deleteAccount(namespace)
         reclaimSpace()
         resetBudgetEstimate()
@@ -94,6 +107,7 @@ class LocalStore(context: Context, val database: AppDatabase = AppDatabase.creat
         dao.deleteAllLyrics()
         dao.deleteAllMatchedLyrics()
         dao.deleteAllIndexes()
+        dao.deleteAllTrackIndexes()
         reclaimSpace()
         estimatedPayloadBytes = 0L
         estimatedPhysicalBytes = physicalBytes()

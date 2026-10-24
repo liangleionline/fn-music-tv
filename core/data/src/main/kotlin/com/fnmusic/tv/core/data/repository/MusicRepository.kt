@@ -17,6 +17,7 @@ import com.fnmusic.tv.core.data.local.CachedIndexEntity
 import com.fnmusic.tv.core.data.local.CachedLyricEntity
 import com.fnmusic.tv.core.data.local.CachedPageEntity
 import com.fnmusic.tv.core.data.local.LocalStore
+import com.fnmusic.tv.core.data.local.TrackIndexEntity
 import com.fnmusic.tv.core.data.preferences.AppPreferences
 import com.fnmusic.tv.core.model.Album
 import com.fnmusic.tv.core.model.AppError
@@ -81,8 +82,6 @@ private const val SEARCH_MAX_PAGES = 500
 
 /** 歌曲搜索索引（预计算拼音）在本地 cache_index 表中的键名。 */
 private const val SEARCH_TRACK_INDEX_KEY = "search_track_index_v1"
-/** 文件夹目录树磁盘缓存键：构建一次后跨启动秒级恢复，打开文件夹不再依赖歌曲索引锁与网络。 */
-private const val FOLDER_TREE_INDEX_KEY = "folder_tree_index_v1"
 
 /** 歌曲搜索索引的刷新周期：超过该时长后在后台静默重建（不阻塞搜索）。 */
 private const val SEARCH_INDEX_TTL_MS = 7L * 24 * 60 * 60 * 1000
@@ -276,37 +275,6 @@ private data class TrackSearchEntryDto(
     val nameInitials: String,
 )
 
-/** 文件夹目录树磁盘缓存：全部条目（目录 + 歌曲）+ 每目录累计歌曲数。 */
-@Serializable
-private data class FolderTreeDto(
-    val version: Int,
-    val entries: List<FolderEntryDto>,
-    val dirCounts: Map<String, Int>,
-)
-
-@Serializable
-private data class FolderEntryDto(
-    val dirPath: String,
-    val track: FolderTrackDto,
-)
-
-/**
- * 目录树歌曲的轻量落盘结构（无拼音字段，纯字段复制、零计算）：
- * 树不需要拼音，落盘/恢复全程不做任何拼音计算，1 万+ 首也可在 1~2 秒内完成序列化。
- */
-@Serializable
-private data class FolderTrackDto(
-    val guid: String,
-    val title: String,
-    val artistName: String?,
-    val albumName: String?,
-    val coverId: String?,
-    val durationMs: Long?,
-    val isCue: Boolean,
-    val accessStatus: Int?,
-    val audioFormat: String?,
-    val folderPath: String,
-)
 
 internal data class ArtworkBounds(val width: Int, val height: Int)
 
@@ -468,9 +436,9 @@ class MusicRepository internal constructor(
     /** 最近一次文件夹加载的诊断信息（来源、耗时、规模）；由 App 层写入崩溃日志文件，用于排查“文件夹卡加载”。 */
     @Volatile
     private var lastFolderDiagnostics: String? = null
-    /** 最近一次目录树来源：内存树 / 磁盘树 / 网络重建。 */
+    /** 最近一次目录树构建前的锁等待毫秒（诊断用）。 */
     @Volatile
-    private var lastFolderSource: String = "内存树"
+    private var lastFolderBuildLockWaitMs: Long = 0L
     private val _favoriteState = MutableStateFlow(FavoriteLibraryState())
     val favoriteState: StateFlow<FavoriteLibraryState> = _favoriteState.asStateFlow()
     private val artworkCache = ArtworkCache(
@@ -808,15 +776,14 @@ class MusicRepository internal constructor(
      */
     suspend fun warmSearchIndex() {
         withContext(Dispatchers.IO) {
-            // 1) 歌曲索引先就绪：磁盘 cache_index 秒级恢复，搜索与文件夹立即可用；
-            // 2) 顺手预构建文件夹目录树（复用刚就绪的歌曲索引），进入“文件夹”页直接内存过滤，秒开；
+            // 1) 歌曲索引先就绪：SQLite 直读秒级恢复，搜索与文件夹立即可用；
+            // 2) 顺手预构建文件夹目录树（复用刚就绪的歌曲索引，纯内存毫秒级），进入“文件夹”页直接内存过滤，秒开；
             // 3) 最后再后台补歌手/专辑全量索引（网络慢，不阻塞任何首屏）。
-            // 全程使用 IO 线程：网络拉取/磁盘 IO 为主，避免占用 Default 线程池拖慢文件夹/列表首屏。
             ensureTrackSearchEntries()
             val namespace = session.cacheNamespace()
             folderIndexMutex.withLock {
                 if (folderIndex?.first != namespace) {
-                    folderIndex = namespace to restoreOrBuildFolderTree(namespace)
+                    folderIndex = namespace to buildFolderTree(indexedTracks(namespace))
                 }
             }
             ensureArtistAlbumIndex()
@@ -833,14 +800,19 @@ class MusicRepository internal constructor(
         val namespace = session.cacheNamespace()
         val startNanos = System.nanoTime()
         var source = "内存树"
+        var buildMs = 0L
         val tree = folderIndexMutex.withLock {
+            val lockWaitMs = (System.nanoTime() - startNanos) / 1_000_000
             if (folderIndex?.first != namespace) {
-                source = lastFolderSource
-                folderIndex = namespace to restoreOrBuildFolderTree(namespace)
+                source = "索引重建"
+                val buildStart = System.nanoTime()
+                folderIndex = namespace to buildFolderTree(indexedTracks(namespace))
+                buildMs = (System.nanoTime() - buildStart) / 1_000_000
+                lastFolderBuildLockWaitMs = lockWaitMs
             }
             folderIndex!!.second
         }
-        val elapsedMs = (System.nanoTime() - startNanos) / 1_000_000
+        val filterStart = System.nanoTime()
         val prefix = if (dirPath.isEmpty()) "" else "$dirPath/"
         val dirs = LinkedHashMap<String, FolderDir>()
         val tracks = ArrayList<Track>()
@@ -857,7 +829,10 @@ class MusicRepository internal constructor(
                 }
             }
         }
-        lastFolderDiagnostics = "目录: ${dirPath.ifEmpty { "根目录" }} | 来源: $source | 耗时: ${elapsedMs}ms | " +
+        val filterMs = (System.nanoTime() - filterStart) / 1_000_000
+        val elapsedMs = (System.nanoTime() - startNanos) / 1_000_000
+        lastFolderDiagnostics = "目录: ${dirPath.ifEmpty { "根目录" }} | 来源: $source | 总耗时: ${elapsedMs}ms | " +
+            "等锁: ${lastFolderBuildLockWaitMs}ms | 建树: ${buildMs}ms | 过滤: ${filterMs}ms | " +
             "树歌曲: ${tree.entries.size} | 子目录: ${dirs.size} | 歌曲: ${tracks.size}"
         FolderChildren(
             dirs = dirs.values.sortedBy { it.name.lowercase() },
@@ -867,48 +842,6 @@ class MusicRepository internal constructor(
 
     /** 最近一次文件夹加载的诊断信息；由 App 层写入崩溃日志文件，方便反馈“文件夹卡加载”。 */
     fun folderDiagnostics(): String? = lastFolderDiagnostics
-
-    /** 目录树获取：内存缓存由调用方管理；这里先试磁盘目录树缓存（秒级恢复），没有才重建并落盘。磁盘 IO 放 IO 线程。 */
-    private suspend fun restoreOrBuildFolderTree(namespace: String): FolderTree = withContext(Dispatchers.IO) {
-        // 1) 磁盘目录树缓存优先：跨启动秒级恢复，完全不依赖歌曲索引锁与网络
-        val cached = runCatching { localStore.index(namespace, FOLDER_TREE_INDEX_KEY) }.getOrNull()
-        if (cached != null && cached.payload.isNotBlank()) {
-            val loaded = runCatching {
-                ApiDecoder.json.decodeFromString<FolderTreeDto>(cached.payload).toTree()
-            }.getOrNull()
-            if (loaded != null && loaded.entries.isNotEmpty()) {
-                lastFolderSource = "磁盘树"
-                val stale = now() - cached.accessedAt > SEARCH_INDEX_TTL_MS
-                if (stale) {
-                    repositoryScope.launch {
-                        runCatching { buildFolderTreeFresh(namespace) }
-                    }
-                }
-                return@withContext loaded
-            }
-        }
-        lastFolderSource = "重建"
-        return@withContext buildFolderTreeFresh(namespace)
-    }
-
-    /** 从歌曲索引（内存/磁盘/Fresh）构建目录树并落盘；仅首次或缓存失效时执行。 */
-    private suspend fun buildFolderTreeFresh(namespace: String): FolderTree = withContext(Dispatchers.IO) {
-        val tracks = indexedTracks(namespace)
-        val tree = buildFolderTree(tracks)
-        if (tree.entries.isNotEmpty()) {
-            runCatching {
-                localStore.saveIndex(
-                    CachedIndexEntity(
-                        namespace = namespace,
-                        indexKey = FOLDER_TREE_INDEX_KEY,
-                        payload = ApiDecoder.json.encodeToString(tree.toDto()),
-                        accessedAt = now(),
-                    ),
-                )
-            }
-        }
-        tree
-    }
 
     /**
      * 全量歌曲列表：优先复用搜索索引（内存预计算拼音索引或磁盘 cache_index 缓存，
@@ -971,55 +904,7 @@ class MusicRepository internal constructor(
         ensureArtistAlbumIndex()
     }
 
-    /** 文件夹树落盘序列化；恢复时反序列化回内存树。纯字段复制，不做拼音计算（拼音只属于搜索索引）。 */
-    private fun FolderTree.toDto(): FolderTreeDto = FolderTreeDto(
-        version = 2,
-        entries = entries.map { entry ->
-            FolderEntryDto(
-                dirPath = entry.dirPath,
-                track = FolderTrackDto(
-                    guid = entry.track.guid.value,
-                    title = entry.track.title,
-                    artistName = entry.track.artistName,
-                    albumName = entry.track.albumName,
-                    coverId = entry.track.coverId,
-                    durationMs = entry.track.durationMs,
-                    isCue = entry.track.isCue,
-                    accessStatus = entry.track.accessStatus,
-                    audioFormat = entry.track.audioFormat,
-                    folderPath = entry.track.folderPath ?: "",
-                ),
-            )
-        },
-        dirCounts = dirCounts,
-    )
-
-    private fun FolderTreeDto.toTree(): FolderTree? {
-        if (entries.isEmpty()) return null
-        val treeEntries = entries.mapNotNull { e ->
-            val t = e.track
-            if (t.title.isBlank()) return@mapNotNull null
-            TrackFolderEntry(
-                Track(
-                    guid = TrackGuid(t.guid),
-                    title = t.title,
-                    artistName = t.artistName,
-                    albumName = t.albumName,
-                    coverId = t.coverId,
-                    durationMs = t.durationMs,
-                    isCue = t.isCue,
-                    accessStatus = t.accessStatus,
-                    audioFormat = t.audioFormat,
-                    folderPath = t.folderPath.takeIf { it.isNotBlank() },
-                ),
-                e.dirPath,
-            )
-        }
-        if (treeEntries.isEmpty()) return null
-        return FolderTree(treeEntries, dirCounts)
-    }
-
-    /** 只确保歌曲搜索索引就绪（磁盘秒级恢复）；文件夹/搜索首屏共用。网络拉取/磁盘 IO 放 IO 线程。 */
+    /** 只确保歌曲搜索索引就绪（SQLite 秒级恢复）；文件夹/搜索首屏共用。网络拉取/磁盘 IO 放 IO 线程。 */
     private suspend fun ensureTrackSearchEntries() {
         val namespace = session.cacheNamespace()
         searchTrackMutex.withLock {
@@ -1050,18 +935,17 @@ class MusicRepository internal constructor(
         }
     }
 
-    /** 歌曲搜索索引条目：构建或从磁盘缓存恢复（优先缓存，跨启动秒级可用）。 */
+    /**
+     * 歌曲搜索索引条目：优先 SQLite 结构化行直读（秒级），其次旧 JSON 缓存一次性迁移，
+     * 都没有才全量拉取重建。避免大 JSON 编解码在低端电视上耗时数十秒。
+     */
     private suspend fun buildTrackSearchEntries(namespace: String): List<TrackSearchEntry> {
-        // 1) 磁盘缓存优先：上次构建好的预计算拼音索引直接恢复，搜索立刻可用
-        val cached = runCatching { localStore.index(namespace, SEARCH_TRACK_INDEX_KEY) }.getOrNull()
-        if (cached != null && cached.payload.isNotBlank()) {
-            val loaded = runCatching {
-                ApiDecoder.json.decodeFromString<TrackSearchIndexDto>(cached.payload)
-                    .tracks.mapNotNull { it.toEntry() }
-            }.getOrNull()
-            if (loaded != null && loaded.isNotEmpty()) {
-                // 2) 超过刷新周期则在后台静默重建（不阻塞本次搜索）
-                val stale = now() - cached.accessedAt > SEARCH_INDEX_TTL_MS
+        // 1) SQLite 歌曲索引直读（秒级）：结构化行，弱 TV 上读 1 万+ 行仅 1~3 秒
+        val rows = runCatching { localStore.trackIndexes(namespace) }.getOrNull()
+        if (rows != null && rows.isNotEmpty()) {
+            val loaded = rows.mapNotNull { it.toSearchEntry() }
+            if (loaded.isNotEmpty()) {
+                val stale = now() - (rows.maxOfOrNull { it.updatedAt } ?: 0L) > SEARCH_INDEX_TTL_MS
                 if (stale) {
                     repositoryScope.launch {
                         runCatching { buildTrackSearchEntriesFresh(namespace) }
@@ -1070,10 +954,27 @@ class MusicRepository internal constructor(
                 return loaded
             }
         }
+        // 2) 旧 JSON 缓存（历史版本）一次性迁移：解码一次写入 SQLite，之后不再走 JSON
+        val cached = runCatching { localStore.index(namespace, SEARCH_TRACK_INDEX_KEY) }.getOrNull()
+        if (cached != null && cached.payload.isNotBlank()) {
+            val loaded = runCatching {
+                ApiDecoder.json.decodeFromString<TrackSearchIndexDto>(cached.payload)
+                    .tracks.mapNotNull { it.toEntry() }
+            }.getOrNull()
+            if (loaded != null && loaded.isNotEmpty()) {
+                repositoryScope.launch {
+                    runCatching {
+                        localStore.saveTrackIndexes(namespace, loaded.map { it.toEntity(namespace) })
+                        localStore.deleteIndex(namespace, SEARCH_TRACK_INDEX_KEY)
+                    }
+                }
+                return loaded
+            }
+        }
         return buildTrackSearchEntriesFresh(namespace)
     }
 
-    /** 从服务端全量拉取歌曲目录并构建预计算拼音索引，落盘 cache_index 供下次启动秒级恢复。 */
+    /** 从服务端全量拉取歌曲目录并构建预计算拼音索引，结构化写入 SQLite 供下次启动秒级恢复。 */
     private suspend fun buildTrackSearchEntriesFresh(namespace: String): List<TrackSearchEntry> {
         val tracks = loadFullCatalog(
             pageLoader = { page, size -> searchTracksPage(page, size) },
@@ -1081,22 +982,46 @@ class MusicRepository internal constructor(
         )
         val entries = tracks.mapNotNull { it.toSearchEntry() }
         if (entries.isNotEmpty()) {
-            val dto = TrackSearchIndexDto(
-                version = 1,
-                tracks = entries.map { it.toDto() },
-            )
             runCatching {
-                localStore.saveIndex(
-                    CachedIndexEntity(
-                        namespace = namespace,
-                        indexKey = SEARCH_TRACK_INDEX_KEY,
-                        payload = ApiDecoder.json.encodeToString(dto),
-                        accessedAt = now(),
-                    ),
-                )
+                localStore.saveTrackIndexes(namespace, entries.map { it.toEntity(namespace) })
             }
         }
         return entries
+    }
+
+    /** 歌曲索引条目落 SQLite 结构化行。 */
+    private fun TrackSearchEntry.toEntity(namespace: String): TrackIndexEntity = TrackIndexEntity(
+        namespace = namespace,
+        guid = track.guid.value,
+        title = track.title,
+        artistName = track.artistName,
+        albumName = track.albumName,
+        coverId = track.coverId,
+        durationMs = track.durationMs,
+        isCue = track.isCue,
+        accessStatus = track.accessStatus,
+        audioFormat = track.audioFormat,
+        folderPath = track.folderPath,
+        namePinyin = namePinyin,
+        nameInitials = nameInitials,
+        updatedAt = now(),
+    )
+
+    private fun TrackIndexEntity.toSearchEntry(): TrackSearchEntry? {
+        if (title.isBlank()) return null
+        val track = Track(
+            guid = TrackGuid(guid),
+            title = title,
+            artistName = artistName,
+            albumName = albumName,
+            coverId = coverId,
+            durationMs = durationMs,
+            isCue = isCue,
+            accessStatus = accessStatus,
+            audioFormat = audioFormat,
+            folderPath = folderPath,
+        )
+        return TrackSearchEntry(track, title.lowercase(), namePinyin, nameInitials)
     }
 
     private fun Track.toSearchEntry(): TrackSearchEntry? {
