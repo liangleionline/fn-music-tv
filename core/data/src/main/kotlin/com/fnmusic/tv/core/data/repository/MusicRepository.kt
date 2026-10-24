@@ -287,7 +287,25 @@ private data class FolderTreeDto(
 @Serializable
 private data class FolderEntryDto(
     val dirPath: String,
-    val track: TrackSearchEntryDto,
+    val track: FolderTrackDto,
+)
+
+/**
+ * 目录树歌曲的轻量落盘结构（无拼音字段，纯字段复制、零计算）：
+ * 树不需要拼音，落盘/恢复全程不做任何拼音计算，1 万+ 首也可在 1~2 秒内完成序列化。
+ */
+@Serializable
+private data class FolderTrackDto(
+    val guid: String,
+    val title: String,
+    val artistName: String?,
+    val albumName: String?,
+    val coverId: String?,
+    val durationMs: Long?,
+    val isCue: Boolean,
+    val accessStatus: Int?,
+    val audioFormat: String?,
+    val folderPath: String,
 )
 
 internal data class ArtworkBounds(val width: Int, val height: Int)
@@ -850,8 +868,8 @@ class MusicRepository internal constructor(
     /** 最近一次文件夹加载的诊断信息；由 App 层写入崩溃日志文件，方便反馈“文件夹卡加载”。 */
     fun folderDiagnostics(): String? = lastFolderDiagnostics
 
-    /** 目录树获取：内存缓存由调用方管理；这里先试磁盘目录树缓存（秒级恢复），没有才网络全量重建并落盘。 */
-    private suspend fun restoreOrBuildFolderTree(namespace: String): FolderTree {
+    /** 目录树获取：内存缓存由调用方管理；这里先试磁盘目录树缓存（秒级恢复），没有才重建并落盘。磁盘 IO 放 IO 线程。 */
+    private suspend fun restoreOrBuildFolderTree(namespace: String): FolderTree = withContext(Dispatchers.IO) {
         // 1) 磁盘目录树缓存优先：跨启动秒级恢复，完全不依赖歌曲索引锁与网络
         val cached = runCatching { localStore.index(namespace, FOLDER_TREE_INDEX_KEY) }.getOrNull()
         if (cached != null && cached.payload.isNotBlank()) {
@@ -866,15 +884,15 @@ class MusicRepository internal constructor(
                         runCatching { buildFolderTreeFresh(namespace) }
                     }
                 }
-                return loaded
+                return@withContext loaded
             }
         }
-        lastFolderSource = "网络重建"
-        return buildFolderTreeFresh(namespace)
+        lastFolderSource = "重建"
+        return@withContext buildFolderTreeFresh(namespace)
     }
 
-    /** 从歌曲索引（内存/磁盘/Fresh）构建目录树并落盘；仅首次或缓存失效时走全量拉取。 */
-    private suspend fun buildFolderTreeFresh(namespace: String): FolderTree {
+    /** 从歌曲索引（内存/磁盘/Fresh）构建目录树并落盘；仅首次或缓存失效时执行。 */
+    private suspend fun buildFolderTreeFresh(namespace: String): FolderTree = withContext(Dispatchers.IO) {
         val tracks = indexedTracks(namespace)
         val tree = buildFolderTree(tracks)
         if (tree.entries.isNotEmpty()) {
@@ -889,7 +907,7 @@ class MusicRepository internal constructor(
                 )
             }
         }
-        return tree
+        tree
     }
 
     /**
@@ -953,11 +971,25 @@ class MusicRepository internal constructor(
         ensureArtistAlbumIndex()
     }
 
-    /** 文件夹树落盘序列化；恢复时反序列化回内存树。 */
+    /** 文件夹树落盘序列化；恢复时反序列化回内存树。纯字段复制，不做拼音计算（拼音只属于搜索索引）。 */
     private fun FolderTree.toDto(): FolderTreeDto = FolderTreeDto(
-        version = 1,
-        entries = entries.mapNotNull { entry ->
-            entry.track.toSearchEntry()?.let { se -> FolderEntryDto(entry.dirPath, se.toDto()) }
+        version = 2,
+        entries = entries.map { entry ->
+            FolderEntryDto(
+                dirPath = entry.dirPath,
+                track = FolderTrackDto(
+                    guid = entry.track.guid.value,
+                    title = entry.track.title,
+                    artistName = entry.track.artistName,
+                    albumName = entry.track.albumName,
+                    coverId = entry.track.coverId,
+                    durationMs = entry.track.durationMs,
+                    isCue = entry.track.isCue,
+                    accessStatus = entry.track.accessStatus,
+                    audioFormat = entry.track.audioFormat,
+                    folderPath = entry.track.folderPath ?: "",
+                ),
+            )
         },
         dirCounts = dirCounts,
     )
@@ -965,7 +997,23 @@ class MusicRepository internal constructor(
     private fun FolderTreeDto.toTree(): FolderTree? {
         if (entries.isEmpty()) return null
         val treeEntries = entries.mapNotNull { e ->
-            e.track.toEntry()?.let { TrackFolderEntry(it.track, e.dirPath) }
+            val t = e.track
+            if (t.title.isBlank()) return@mapNotNull null
+            TrackFolderEntry(
+                Track(
+                    guid = TrackGuid(t.guid),
+                    title = t.title,
+                    artistName = t.artistName,
+                    albumName = t.albumName,
+                    coverId = t.coverId,
+                    durationMs = t.durationMs,
+                    isCue = t.isCue,
+                    accessStatus = t.accessStatus,
+                    audioFormat = t.audioFormat,
+                    folderPath = t.folderPath.takeIf { it.isNotBlank() },
+                ),
+                e.dirPath,
+            )
         }
         if (treeEntries.isEmpty()) return null
         return FolderTree(treeEntries, dirCounts)
