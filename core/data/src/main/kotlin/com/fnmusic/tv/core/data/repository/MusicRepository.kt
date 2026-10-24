@@ -83,7 +83,7 @@ private const val SEARCH_MAX_PAGES = 500
 private const val SEARCH_TRACK_INDEX_KEY = "search_track_index_v1"
 
 /** 歌曲搜索索引的刷新周期：超过该时长后在后台静默重建（不阻塞搜索）。 */
-private const val SEARCH_INDEX_TTL_MS = 24L * 60 * 60 * 1000
+private const val SEARCH_INDEX_TTL_MS = 7L * 24 * 60 * 60 * 1000
 
 /** 客户端本地搜索结果，按歌单 / 歌手 / 专辑 / 歌曲分类。 */
 data class SearchResults(
@@ -269,6 +269,7 @@ private data class TrackSearchEntryDto(
     val isCue: Boolean,
     val accessStatus: Int?,
     val audioFormat: String?,
+    val folderPath: String,
     val namePinyin: String,
     val nameInitials: String,
 )
@@ -766,10 +767,11 @@ class MusicRepository internal constructor(
      * 幂等；账号切换时自动重建。
      */
     suspend fun warmSearchIndex() {
-        withContext(Dispatchers.Default) {
+        withContext(Dispatchers.IO) {
             // 1) 歌曲索引先就绪：磁盘 cache_index 秒级恢复，搜索与文件夹立即可用；
             // 2) 顺手预构建文件夹目录树（复用刚就绪的歌曲索引），进入“文件夹”页直接内存过滤，秒开；
             // 3) 最后再后台补歌手/专辑全量索引（网络慢，不阻塞任何首屏）。
+            // 全程使用 IO 线程：网络拉取/磁盘 IO 为主，避免占用 Default 线程池拖慢文件夹/列表首屏。
             ensureTrackSearchEntries()
             val namespace = session.cacheNamespace()
             folderIndexMutex.withLock {
@@ -837,10 +839,12 @@ class MusicRepository internal constructor(
         ensureTrackSearchEntries()
         val afterEnsure = fromIndex()
         if (afterEnsure != null) return afterEnsure
-        return loadFullCatalog(
-            pageLoader = { page, size -> searchTracksPage(page, size) },
-            idOf = { it.guid.value },
-        )
+        return withContext(Dispatchers.IO) {
+            loadFullCatalog(
+                pageLoader = { page, size -> searchTracksPage(page, size) },
+                idOf = { it.guid.value },
+            )
+        }
     }
 
     private fun buildFolderTree(tracks: List<Track>): FolderTree {
@@ -879,12 +883,14 @@ class MusicRepository internal constructor(
         ensureArtistAlbumIndex()
     }
 
-    /** 只确保歌曲搜索索引就绪（磁盘秒级恢复）；文件夹/搜索首屏共用。 */
+    /** 只确保歌曲搜索索引就绪（磁盘秒级恢复）；文件夹/搜索首屏共用。网络拉取/磁盘 IO 放 IO 线程。 */
     private suspend fun ensureTrackSearchEntries() {
         val namespace = session.cacheNamespace()
         searchTrackMutex.withLock {
             if (searchTrackEntries?.first != namespace) {
-                searchTrackEntries = namespace to buildTrackSearchEntries(namespace)
+                searchTrackEntries = namespace to withContext(Dispatchers.IO) {
+                    buildTrackSearchEntries(namespace)
+                }
             }
         }
     }
@@ -974,6 +980,7 @@ class MusicRepository internal constructor(
         isCue = track.isCue,
         accessStatus = track.accessStatus,
         audioFormat = track.audioFormat,
+        folderPath = track.folderPath ?: "",
         namePinyin = namePinyin,
         nameInitials = nameInitials,
     )
@@ -990,6 +997,7 @@ class MusicRepository internal constructor(
             isCue = isCue,
             accessStatus = accessStatus,
             audioFormat = audioFormat,
+            folderPath = folderPath.takeIf { it.isNotBlank() },
         )
         return TrackSearchEntry(track, title.lowercase(), namePinyin, nameInitials)
     }
