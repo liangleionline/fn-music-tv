@@ -415,7 +415,10 @@ class MusicRepository internal constructor(
         matcher = onlineLyricsMatcher,
     )
     private val favoriteMutationMutex = Mutex()
-    private val searchIndexMutex = Mutex()
+    /** 歌曲搜索索引锁（磁盘 cache_index 秒级恢复，短持有）；文件夹与搜索首屏只依赖它。 */
+    private val searchTrackMutex = Mutex()
+    /** 歌手/专辑全量索引锁（网络全量拉取，慢）；与歌曲索引分开，避免阻塞文件夹首开。 */
+    private val searchMetaMutex = Mutex()
     private val folderIndexMutex = Mutex()
     /** 歌曲搜索索引（预计算拼音，内存），按登录账号缓存；登录后由 warmSearchIndex() 后台构建，搜索时按需补齐。 */
     private var searchTrackEntries: Pair<String, List<TrackSearchEntry>>? = null
@@ -764,9 +767,20 @@ class MusicRepository internal constructor(
      */
     suspend fun warmSearchIndex() {
         withContext(Dispatchers.Default) {
-            // 登录后一次性构建完整搜索索引（歌手/专辑/歌曲+预计算拼音），
-            // 首次搜索即命中内存索引，无需再逐页扫描与实时转拼音。
-            ensureSearchIndex()
+            // 1) 歌曲索引先就绪：磁盘 cache_index 秒级恢复，搜索与文件夹立即可用；
+            // 2) 顺手预构建文件夹目录树（复用刚就绪的歌曲索引），进入“文件夹”页直接内存过滤，秒开；
+            // 3) 最后再后台补歌手/专辑全量索引（网络慢，不阻塞任何首屏）。
+            ensureTrackSearchEntries()
+            val namespace = session.cacheNamespace()
+            folderIndexMutex.withLock {
+                if (folderIndex?.first != namespace) {
+                    val tracks = indexedTracks(namespace)
+                    if (tracks.isNotEmpty()) {
+                        folderIndex = namespace to buildFolderTree(tracks)
+                    }
+                }
+            }
+            ensureArtistAlbumIndex()
         }
     }
 
@@ -818,7 +832,9 @@ class MusicRepository internal constructor(
             ?.takeIf { it.isNotEmpty() }
         val cached = fromIndex()
         if (cached != null) return cached
-        runCatching { ensureSearchIndex() }
+        // 只确保歌曲索引就绪（磁盘 cache_index 秒级恢复；无缓存才回退全量拉取）。
+        // 不再触发歌手/专辑全量索引——那是搜索用的，且网络慢，会显著拖慢文件夹首开。
+        ensureTrackSearchEntries()
         val afterEnsure = fromIndex()
         if (afterEnsure != null) return afterEnsure
         return loadFullCatalog(
@@ -857,13 +873,29 @@ class MusicRepository internal constructor(
         return FolderTree(entries, total)
     }
 
+    /** 完整搜索索引：歌曲 + 歌手/专辑。搜索入口调用；文件夹只依赖 ensureTrackSearchEntries()。 */
     private suspend fun ensureSearchIndex() {
+        ensureTrackSearchEntries()
+        ensureArtistAlbumIndex()
+    }
+
+    /** 只确保歌曲搜索索引就绪（磁盘秒级恢复）；文件夹/搜索首屏共用。 */
+    private suspend fun ensureTrackSearchEntries() {
         val namespace = session.cacheNamespace()
-        searchIndexMutex.withLock {
+        searchTrackMutex.withLock {
+            if (searchTrackEntries?.first != namespace) {
+                searchTrackEntries = namespace to buildTrackSearchEntries(namespace)
+            }
+        }
+    }
+
+    /** 只确保歌手/专辑全量索引就绪（网络全量拉取，慢）；后台预热时最后执行。 */
+    private suspend fun ensureArtistAlbumIndex() {
+        val namespace = session.cacheNamespace()
+        searchMetaMutex.withLock {
             if (
                 searchArtists?.first == namespace &&
-                searchAlbums?.first == namespace &&
-                searchTrackEntries?.first == namespace
+                searchAlbums?.first == namespace
             ) return
             searchArtists = namespace to loadFullCatalog(
                 pageLoader = { page, size -> artists(page, size) },
@@ -873,7 +905,6 @@ class MusicRepository internal constructor(
                 pageLoader = { page, size -> albums(page, size) },
                 idOf = { it.guid.value },
             )
-            searchTrackEntries = namespace to buildTrackSearchEntries(namespace)
         }
     }
 
