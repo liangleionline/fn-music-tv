@@ -909,6 +909,7 @@ private fun FolderBrowserScreen(
     var initialFocusRequested by remember { mutableStateOf(false) }
     var settleNowPlaying by remember { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
     val firstDirFocus = remember { FocusRequester() }
     val firstTrackFocus = remember { FocusRequester() }
     val nowPlayingTrackFocus = remember { FocusRequester() }
@@ -969,6 +970,14 @@ private fun FolderBrowserScreen(
         if (settleNowPlaying && currentGuid != null) {
             val nowPlayingIndex = content.tracks.indexOfFirst { it.guid.value == currentGuid }
             if (nowPlayingIndex >= 0) {
+                // 歌曲行在 LazyColumn 中的全局索引：子文件夹标题 + 目录行 + 间隔 + “本目录歌曲”标题 + 列头 + 歌曲序号
+                val trackListStart = if (content.dirs.isNotEmpty()) {
+                    1 + content.dirs.chunked(4).size + 1 + 2
+                } else {
+                    2
+                }
+                yield()
+                runCatching { listState.scrollToItem((trackListStart + nowPlayingIndex).coerceAtLeast(0)) }
                 yield()
                 runCatching { nowPlayingTrackFocus.requestFocus() }
                 initialFocusRequested = true
@@ -1041,6 +1050,7 @@ private fun FolderBrowserScreen(
                 } else {
                     val dirRows = content.dirs.chunked(4)
                     LazyColumn(
+                        state = listState,
                         contentPadding = PaddingValues(bottom = 32.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
@@ -3098,6 +3108,13 @@ private fun TrackCollection(
             return@LaunchedEffect
         }
         if (targetKey != null) {
+            // 当前播放歌曲行可能位于视口外：先滚动到该行，再请求焦点（未组合的行无法聚焦）。
+            if (targetKey == currentGuid) {
+                val nowPlayingIndex = tracks.indexOfFirst { it.guid.value == targetKey }
+                if (nowPlayingIndex >= 0) {
+                    runCatching { listState.scrollToItem(nowPlayingIndex.coerceAtLeast(0)) }
+                }
+            }
             repeat(3) {
                 withFrameNanos { }
                 if (runCatching { restoredFocus.requestFocus() }.getOrDefault(false)) {
@@ -4362,6 +4379,7 @@ private fun SearchScreen(
     val scope = rememberCoroutineScope()
     val inputFocus = remember { FocusRequester() }
     val nowPlayingTrackFocus = remember { FocusRequester() }
+    val resultListState = rememberLazyListState()
     var settleNowPlaying by remember { mutableStateOf(true) }
     val playbackState by container.playbackController.state.collectAsStateWithLifecycle()
     val currentGuid = playbackState.queueItems.firstOrNull { it.isCurrent }?.mediaId
@@ -4382,7 +4400,7 @@ private fun SearchScreen(
         }
     }
 
-    // 从播放页返回（且当前正在播放的歌曲在当前搜索结果中）→ 焦点落到当前播放歌曲行；
+    // 从播放页返回（且当前正在播放的歌曲在当前搜索结果中）→ 滚动到该行并落焦点；
     // 主动搜索/浏览后（settleNowPlaying=false）不再抢焦点。
     LaunchedEffect(results, currentGuid) {
         val content = results
@@ -4390,6 +4408,8 @@ private fun SearchScreen(
         if (settleNowPlaying && currentGuid != null) {
             val index = content.tracks.indexOfFirst { it.guid.value == currentGuid }
             if (index in 0 until 30) {
+                yield()
+                runCatching { resultListState.scrollToItem((1 + index).coerceAtLeast(0)) }
                 yield()
                 runCatching { nowPlayingTrackFocus.requestFocus() }
                 settleNowPlaying = false
@@ -4461,6 +4481,7 @@ private fun SearchScreen(
                 results = results!!,
                 currentGuid = currentGuid,
                 nowPlayingTrackFocus = nowPlayingTrackFocus,
+                listState = resultListState,
                 onPlayTrack = ::playSearchTracks,
                 onOpenPlaylist = onOpenPlaylist,
                 onOpenArtist = onOpenArtist,
@@ -4554,6 +4575,7 @@ private fun SearchResultsContent(
     results: SearchResults,
     currentGuid: String?,
     nowPlayingTrackFocus: FocusRequester,
+    listState: androidx.compose.foundation.lazy.LazyListState,
     onPlayTrack: (List<Track>, Int, Track) -> Unit,
     onOpenPlaylist: (Playlist) -> Unit,
     onOpenArtist: (Artist) -> Unit,
@@ -4561,7 +4583,7 @@ private fun SearchResultsContent(
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
-        state = rememberLazyListState(),
+        state = listState,
         contentPadding = PaddingValues(bottom = 32.dp),
         modifier = modifier,
     ) {
