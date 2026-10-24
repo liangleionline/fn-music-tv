@@ -900,7 +900,7 @@ private fun FolderBrowserScreen(
         if (loading) return
         loading = true
         initialFocusRequested = false
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
             runCatching { repository.folderChildren(path) }
                 .onSuccess {
                     children = it

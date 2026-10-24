@@ -776,15 +776,11 @@ class MusicRepository internal constructor(
      * 按路径分段成目录层级）。返回指定目录下的子目录与歌曲；目录树按账号缓存，
      * 首次构建后各层浏览均为纯内存过滤。
      */
-    suspend fun folderChildren(dirPath: String): FolderChildren {
+    suspend fun folderChildren(dirPath: String): FolderChildren = withContext(Dispatchers.Default) {
         val namespace = session.cacheNamespace()
         val tree = folderIndexMutex.withLock {
             if (folderIndex?.first != namespace) {
-                val tracks = loadFullCatalog(
-                    pageLoader = { page, size -> searchTracksPage(page, size) },
-                    idOf = { it.guid.value },
-                )
-                folderIndex = namespace to buildFolderTree(tracks)
+                folderIndex = namespace to buildFolderTree(indexedTracks(namespace))
             }
             folderIndex!!.second
         }
@@ -804,9 +800,30 @@ class MusicRepository internal constructor(
                 }
             }
         }
-        return FolderChildren(
+        FolderChildren(
             dirs = dirs.values.sortedBy { it.name.lowercase() },
             tracks = tracks.sortedBy { it.title.lowercase() },
+        )
+    }
+
+    /**
+     * 全量歌曲列表：优先复用搜索索引（内存预计算拼音索引或磁盘 cache_index 缓存，
+     * 秒级恢复），避免目录树重复全量拉取网络；索引不可用时回退到直接全量拉取。
+     */
+    private suspend fun indexedTracks(namespace: String): List<Track> {
+        fun fromIndex(): List<Track>? = searchTrackEntries
+            ?.takeIf { it.first == namespace && it.second.isNotEmpty() }
+            ?.second
+            ?.mapNotNull { it.track }
+            ?.takeIf { it.isNotEmpty() }
+        val cached = fromIndex()
+        if (cached != null) return cached
+        runCatching { ensureSearchIndex() }
+        val afterEnsure = fromIndex()
+        if (afterEnsure != null) return afterEnsure
+        return loadFullCatalog(
+            pageLoader = { page, size -> searchTracksPage(page, size) },
+            idOf = { it.guid.value },
         )
     }
 
