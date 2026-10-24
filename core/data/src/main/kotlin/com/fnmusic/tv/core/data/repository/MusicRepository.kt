@@ -81,6 +81,8 @@ private const val SEARCH_MAX_PAGES = 500
 
 /** 歌曲搜索索引（预计算拼音）在本地 cache_index 表中的键名。 */
 private const val SEARCH_TRACK_INDEX_KEY = "search_track_index_v1"
+/** 文件夹目录树磁盘缓存键：构建一次后跨启动秒级恢复，打开文件夹不再依赖歌曲索引锁与网络。 */
+private const val FOLDER_TREE_INDEX_KEY = "folder_tree_index_v1"
 
 /** 歌曲搜索索引的刷新周期：超过该时长后在后台静默重建（不阻塞搜索）。 */
 private const val SEARCH_INDEX_TTL_MS = 7L * 24 * 60 * 60 * 1000
@@ -274,6 +276,20 @@ private data class TrackSearchEntryDto(
     val nameInitials: String,
 )
 
+/** 文件夹目录树磁盘缓存：全部条目（目录 + 歌曲）+ 每目录累计歌曲数。 */
+@Serializable
+private data class FolderTreeDto(
+    val version: Int,
+    val entries: List<FolderEntryDto>,
+    val dirCounts: Map<String, Int>,
+)
+
+@Serializable
+private data class FolderEntryDto(
+    val dirPath: String,
+    val track: TrackSearchEntryDto,
+)
+
 internal data class ArtworkBounds(val width: Int, val height: Int)
 
 internal fun TrackDto.toFavoriteDomain(): Track = toDomain().copy(isFavorite = true)
@@ -431,6 +447,12 @@ class MusicRepository internal constructor(
     /** 最近一次搜索的诊断信息（查询、索引规模、命中数、近似候选），用于排查“搜不到”；由 App 层写入崩溃日志文件。 */
     @Volatile
     private var lastSearchDiagnostics: String? = null
+    /** 最近一次文件夹加载的诊断信息（来源、耗时、规模）；由 App 层写入崩溃日志文件，用于排查“文件夹卡加载”。 */
+    @Volatile
+    private var lastFolderDiagnostics: String? = null
+    /** 最近一次目录树来源：内存树 / 磁盘树 / 网络重建。 */
+    @Volatile
+    private var lastFolderSource: String = "内存树"
     private val _favoriteState = MutableStateFlow(FavoriteLibraryState())
     val favoriteState: StateFlow<FavoriteLibraryState> = _favoriteState.asStateFlow()
     private val artworkCache = ArtworkCache(
@@ -776,10 +798,7 @@ class MusicRepository internal constructor(
             val namespace = session.cacheNamespace()
             folderIndexMutex.withLock {
                 if (folderIndex?.first != namespace) {
-                    val tracks = indexedTracks(namespace)
-                    if (tracks.isNotEmpty()) {
-                        folderIndex = namespace to buildFolderTree(tracks)
-                    }
+                    folderIndex = namespace to restoreOrBuildFolderTree(namespace)
                 }
             }
             ensureArtistAlbumIndex()
@@ -794,12 +813,16 @@ class MusicRepository internal constructor(
      */
     suspend fun folderChildren(dirPath: String): FolderChildren = withContext(Dispatchers.Default) {
         val namespace = session.cacheNamespace()
+        val startNanos = System.nanoTime()
+        var source = "内存树"
         val tree = folderIndexMutex.withLock {
             if (folderIndex?.first != namespace) {
-                folderIndex = namespace to buildFolderTree(indexedTracks(namespace))
+                source = lastFolderSource
+                folderIndex = namespace to restoreOrBuildFolderTree(namespace)
             }
             folderIndex!!.second
         }
+        val elapsedMs = (System.nanoTime() - startNanos) / 1_000_000
         val prefix = if (dirPath.isEmpty()) "" else "$dirPath/"
         val dirs = LinkedHashMap<String, FolderDir>()
         val tracks = ArrayList<Track>()
@@ -816,10 +839,57 @@ class MusicRepository internal constructor(
                 }
             }
         }
+        lastFolderDiagnostics = "目录: ${dirPath.ifEmpty { "根目录" }} | 来源: $source | 耗时: ${elapsedMs}ms | " +
+            "树歌曲: ${tree.entries.size} | 子目录: ${dirs.size} | 歌曲: ${tracks.size}"
         FolderChildren(
             dirs = dirs.values.sortedBy { it.name.lowercase() },
             tracks = tracks.sortedBy { it.title.lowercase() },
         )
+    }
+
+    /** 最近一次文件夹加载的诊断信息；由 App 层写入崩溃日志文件，方便反馈“文件夹卡加载”。 */
+    fun folderDiagnostics(): String? = lastFolderDiagnostics
+
+    /** 目录树获取：内存缓存由调用方管理；这里先试磁盘目录树缓存（秒级恢复），没有才网络全量重建并落盘。 */
+    private suspend fun restoreOrBuildFolderTree(namespace: String): FolderTree {
+        // 1) 磁盘目录树缓存优先：跨启动秒级恢复，完全不依赖歌曲索引锁与网络
+        val cached = runCatching { localStore.index(namespace, FOLDER_TREE_INDEX_KEY) }.getOrNull()
+        if (cached != null && cached.payload.isNotBlank()) {
+            val loaded = runCatching {
+                ApiDecoder.json.decodeFromString<FolderTreeDto>(cached.payload).toTree()
+            }.getOrNull()
+            if (loaded != null && loaded.entries.isNotEmpty()) {
+                lastFolderSource = "磁盘树"
+                val stale = now() - cached.accessedAt > SEARCH_INDEX_TTL_MS
+                if (stale) {
+                    repositoryScope.launch {
+                        runCatching { buildFolderTreeFresh(namespace) }
+                    }
+                }
+                return loaded
+            }
+        }
+        lastFolderSource = "网络重建"
+        return buildFolderTreeFresh(namespace)
+    }
+
+    /** 从歌曲索引（内存/磁盘/Fresh）构建目录树并落盘；仅首次或缓存失效时走全量拉取。 */
+    private suspend fun buildFolderTreeFresh(namespace: String): FolderTree {
+        val tracks = indexedTracks(namespace)
+        val tree = buildFolderTree(tracks)
+        if (tree.entries.isNotEmpty()) {
+            runCatching {
+                localStore.saveIndex(
+                    CachedIndexEntity(
+                        namespace = namespace,
+                        indexKey = FOLDER_TREE_INDEX_KEY,
+                        payload = ApiDecoder.json.encodeToString(tree.toDto()),
+                        accessedAt = now(),
+                    ),
+                )
+            }
+        }
+        return tree
     }
 
     /**
@@ -881,6 +951,24 @@ class MusicRepository internal constructor(
     private suspend fun ensureSearchIndex() {
         ensureTrackSearchEntries()
         ensureArtistAlbumIndex()
+    }
+
+    /** 文件夹树落盘序列化；恢复时反序列化回内存树。 */
+    private fun FolderTree.toDto(): FolderTreeDto = FolderTreeDto(
+        version = 1,
+        entries = entries.mapNotNull { entry ->
+            entry.track.toSearchEntry()?.let { se -> FolderEntryDto(entry.dirPath, se.toDto()) }
+        },
+        dirCounts = dirCounts,
+    )
+
+    private fun FolderTreeDto.toTree(): FolderTree? {
+        if (entries.isEmpty()) return null
+        val treeEntries = entries.mapNotNull { e ->
+            e.track.toEntry()?.let { TrackFolderEntry(it.track, e.dirPath) }
+        }
+        if (treeEntries.isEmpty()) return null
+        return FolderTree(treeEntries, dirCounts)
     }
 
     /** 只确保歌曲搜索索引就绪（磁盘秒级恢复）；文件夹/搜索首屏共用。网络拉取/磁盘 IO 放 IO 线程。 */
@@ -970,8 +1058,7 @@ class MusicRepository internal constructor(
         return TrackSearchEntry(this, lower, idx.pinyinCompact, idx.initials)
     }
 
-    private fun TrackSearchEntry.toDto(): TrackSearchEntryDto = TrackSearchEntryDto(
-        guid = track.guid.value,
+    private fun TrackSearchEntry.toDto(): TrackSearchEntryDto = TrackSearchEntryDto(        guid = track.guid.value,
         title = track.title,
         artistName = track.artistName,
         albumName = track.albumName,

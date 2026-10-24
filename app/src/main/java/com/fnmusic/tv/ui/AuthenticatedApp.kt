@@ -902,6 +902,7 @@ private fun FolderBrowserScreen(
     onBack: () -> Unit,
 ) {
     val repository = container.musicRepository
+    val context = LocalContext.current
     var dirPath by rememberSaveable { mutableStateOf("") }
     var children by remember { mutableStateOf<FolderChildren?>(null) }
     var loading by remember { mutableStateOf(false) }
@@ -926,6 +927,11 @@ private fun FolderBrowserScreen(
                 .onSuccess {
                     children = it
                     error = null
+                    // 每次文件夹加载后把诊断写入日志，可在 设置→崩溃日志 中查看“为什么卡加载”
+                    CrashLogStore.appendEntry(
+                        context.applicationContext,
+                        "文件夹加载诊断\n" + repository.folderDiagnostics().orEmpty(),
+                    )
                 }
                 .onFailure {
                     error = (it as? AppException)?.error ?: AppError.Unknown()
