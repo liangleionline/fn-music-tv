@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 4,
-    "identityHash": "db89c43cfb7c63b63bbe795352b3f317",
+    "identityHash": "42ff2713b2d9159cc6aaf40168e6db61",
     "entities": [
       {
         "tableName": "account_state",
@@ -315,12 +315,23 @@
             "namespace",
             "guid"
           ]
-        }
+        },
+        "indices": [
+          {
+            "name": "idx_track_index_namespace",
+            "unique": false,
+            "columnNames": [
+              "namespace"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_track_index_namespace` ON `${TABLE_NAME}` (`namespace`)"
+          }
+        ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'db89c43cfb7c63b63bbe795352b3f317')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '42ff2713b2d9159cc6aaf40168e6db61')"
     ]
   }
 }

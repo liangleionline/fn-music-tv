@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
@@ -64,7 +65,11 @@ data class CachedIndexEntity(
  * 歌曲搜索/文件夹索引（结构化行，代替大 JSON 缓存）：
  * SQLite 直读 1 万+ 行为秒级，而 4~8MB 的 JSON 字符串在低端电视上编解码需要数十秒。
  */
-@Entity(tableName = "track_index", primaryKeys = ["namespace", "guid"])
+@Entity(
+    tableName = "track_index",
+    primaryKeys = ["namespace", "guid"],
+    indices = [Index(value = ["namespace"], name = "idx_track_index_namespace")],
+)
 data class TrackIndexEntity(
     val namespace: String,
     val guid: String,
