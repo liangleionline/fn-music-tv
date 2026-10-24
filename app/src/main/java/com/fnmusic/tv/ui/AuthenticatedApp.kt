@@ -373,7 +373,22 @@ internal fun AuthenticatedApp(
                 onBack = back,
             ),
         )
-        is LibraryRoute.Player -> ImmersivePlayer(
+        is LibraryRoute.Player -> {
+            // 点击歌曲（文件夹 / 搜索结果等直接 open(Player(track)) 的入口）：
+            // 在路由层统一消费 track——若当前队列还没有这首曲目则立即播放；
+            // 队列已包含（如 TrackCollection.play() 已先播放整条队列再导航）则只打开界面不重复播放。
+            val pendingTrack = route.track
+            val pendingGuid = pendingTrack?.guid?.value
+            LaunchedEffect(pendingGuid) {
+                val track = pendingTrack ?: return@LaunchedEffect
+                val controller = container.playbackController
+                val alreadyQueued = controller.state.value.queueItems.any { it.mediaId == track.guid.value }
+                if (!alreadyQueued) {
+                    val prepared = container.musicRepository.prepare(track)
+                    controller.playQueue(listOf(prepared), autoPlay = true)
+                }
+            }
+            ImmersivePlayer(
             container = container,
             playback = playback,
             visualContinuity = playerVisualContinuity,
@@ -387,6 +402,7 @@ internal fun AuthenticatedApp(
                 }
             },
         )
+        }
                 LibraryRoute.Settings -> SettingsScreen(container)
             }
         }
