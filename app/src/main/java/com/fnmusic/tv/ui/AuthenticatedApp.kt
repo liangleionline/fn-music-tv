@@ -907,10 +907,14 @@ private fun FolderBrowserScreen(
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<AppError?>(null) }
     var initialFocusRequested by remember { mutableStateOf(false) }
+    var settleNowPlaying by remember { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
     val firstDirFocus = remember { FocusRequester() }
     val firstTrackFocus = remember { FocusRequester() }
+    val nowPlayingTrackFocus = remember { FocusRequester() }
     val retryFocus = remember { FocusRequester() }
+    val playbackState by container.playbackController.state.collectAsStateWithLifecycle()
+    val currentGuid = playbackState.queueItems.firstOrNull { it.isCurrent }?.mediaId
 
     fun load(path: String) {
         if (loading) return
@@ -942,9 +946,37 @@ private fun FolderBrowserScreen(
         }
     }
 
+    // 点歌：以当前目录全部歌曲构建完整播放队列（从点击曲目开始），保证播放页“下一首/上一首”有后续歌曲。
+    fun playFolderTracks(tracks: List<Track>, clickedIndex: Int, target: Track) {
+        val playable = tracks.filter(::isTrackPlayable)
+        if (playable.isEmpty()) return
+        val window = boundedQueueWindow(playable, clickedIndex.coerceIn(playable.indices))
+        val queue = repository.prepareQueue(window.items)
+        val queueIndex = queue.indexOfFirst { it.track.guid.value == target.guid.value }
+        if (queue.isEmpty() || queueIndex < 0) return
+        settleNowPlaying = true
+        scope.launch {
+            runCatching {
+                container.playbackController.playQueue(tracks = queue, startIndex = queueIndex, autoPlay = true)
+            }.onSuccess { onPlayTrack(target) }
+        }
+    }
+
     LaunchedEffect(children, loading, error) {
         if (initialFocusRequested || loading || error != null) return@LaunchedEffect
         val content = children ?: return@LaunchedEffect
+        // 进入/从播放页返回：若当前正在播放的歌曲在本目录，优先把焦点落到它那一行。
+        if (settleNowPlaying && currentGuid != null) {
+            val nowPlayingIndex = content.tracks.indexOfFirst { it.guid.value == currentGuid }
+            if (nowPlayingIndex >= 0) {
+                yield()
+                runCatching { nowPlayingTrackFocus.requestFocus() }
+                initialFocusRequested = true
+                settleNowPlaying = false
+                return@LaunchedEffect
+            }
+        }
+        settleNowPlaying = false
         if (content.dirs.isNotEmpty()) {
             yield()
             runCatching { firstDirFocus.requestFocus() }
@@ -1064,8 +1096,13 @@ private fun FolderBrowserScreen(
                                     index = index,
                                     track = track,
                                     enabled = true,
-                                    modifier = if (index == 0) Modifier.focusRequester(firstTrackFocus) else Modifier,
-                                    onClick = { onPlayTrack(track) },
+                                    nowPlaying = track.guid.value == currentGuid,
+                                    modifier = when {
+                                        track.guid.value == currentGuid -> Modifier.focusRequester(nowPlayingTrackFocus)
+                                        index == 0 -> Modifier.focusRequester(firstTrackFocus)
+                                        else -> Modifier
+                                    },
+                                    onClick = { playFolderTracks(content.tracks, index, track) },
                                 )
                             }
                         }
@@ -2918,8 +2955,11 @@ private fun TrackCollection(
     val error = snapshot.error
     val expectedTotal = snapshot.expectedTotal
     val expectedSort = snapshot.expectedSort
+    val playbackState by container.playbackController.state.collectAsStateWithLifecycle()
+    val currentGuid = playbackState.queueItems.firstOrNull { it.isCurrent }?.mediaId
     var focusedKey by rememberSaveable(stateKey) { mutableStateOf<String?>(null) }
     var initialFocusRequested by remember(stateKey) { mutableStateOf(false) }
+    var settleNowPlaying by remember(stateKey) { mutableStateOf(true) }
     val restoredFocus = remember(stateKey) { FocusRequester() }
     val listState = rememberLazyListState()
     val actionScope = rememberCoroutineScope()
@@ -3044,7 +3084,15 @@ private fun TrackCollection(
             if (showTrackList) addAll(playableTracks.map { it.guid.value })
             add("detail-back")
         }
-        val targetKey = focusedKey?.takeIf(availableKeys::contains) ?: availableKeys.firstOrNull()
+        // 进入/从播放页返回时，若当前正在播放的歌曲在本列表，优先选中它；
+        // 用户手动移动焦点后（settleNowPlaying 已复位）不再抢焦点。
+        val nowPlayingKey = settleNowPlaying.takeIf { it }?.let {
+            currentGuid?.takeIf(availableKeys::contains)
+        }
+        val targetKey = nowPlayingKey
+            ?: focusedKey?.takeIf(availableKeys::contains)
+            ?: availableKeys.firstOrNull()
+        settleNowPlaying = false
         if (focusedKey != targetKey) {
             focusedKey = targetKey
             return@LaunchedEffect
@@ -3067,6 +3115,7 @@ private fun TrackCollection(
         coverId = coverId,
         trackCount = detailHeader.declaredTrackCount ?: expectedTotal?.takeIf { it > 0 },
         tracks = tracks,
+        currentGuid = currentGuid,
         loading = loading,
         error = error,
         hasNext = hasNext,
@@ -3102,6 +3151,7 @@ private fun DetailTrackCollection(
     coverId: String?,
     trackCount: Int?,
     tracks: List<Track>,
+    currentGuid: String?,
     loading: Boolean,
     error: AppError?,
     hasNext: Boolean,
@@ -3242,6 +3292,7 @@ private fun DetailTrackCollection(
                         index = index,
                         track = track,
                         enabled = isTrackPlayable(track),
+                        nowPlaying = track.guid.value == currentGuid,
                         modifier = Modifier
                             .then(if (focusedKey == track.guid.value) Modifier.focusRequester(restoredFocus) else Modifier)
                             .onFocusChanged { if (it.isFocused) onTrackFocused(index, track.guid.value) },
@@ -3389,6 +3440,7 @@ private fun DetailTrackRow(
     index: Int,
     track: Track,
     enabled: Boolean,
+    nowPlaying: Boolean = false,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
@@ -3405,13 +3457,13 @@ private fun DetailTrackRow(
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1f),
         colors = ButtonDefaults.colors(
-            containerColor = Color.Transparent,
+            containerColor = if (nowPlaying) Color.White.copy(alpha = 0.05f) else Color.Transparent,
             contentColor = FnColors.Text,
             focusedContainerColor = FnColors.FocusFill,
             focusedContentColor = FnColors.Text,
             pressedContainerColor = FnColors.FocusFill,
             pressedContentColor = FnColors.Text,
-            disabledContainerColor = Color.Transparent,
+            disabledContainerColor = if (nowPlaying) Color.White.copy(alpha = 0.05f) else Color.Transparent,
             disabledContentColor = FnColors.Muted.copy(alpha = 0.5f),
         ),
         contentPadding = PaddingValues(horizontal = 15.dp, vertical = 0.dp),
@@ -3419,13 +3471,14 @@ private fun DetailTrackRow(
         val contentColor = LocalContentColor.current
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                (index + 1).toString().padStart(2, '0'),
-                color = contentColor.copy(alpha = 0.66f),
+                if (nowPlaying) "▶" else (index + 1).toString().padStart(2, '0'),
+                color = if (nowPlaying) FnColors.Coral else contentColor.copy(alpha = 0.66f),
                 fontSize = 13.sp,
+                fontWeight = if (nowPlaying) FontWeight.Bold else FontWeight.Normal,
                 modifier = Modifier.width(54.dp),
             )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
-                Text(track.title, color = contentColor, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(track.title, color = if (nowPlaying) FnColors.Coral else contentColor, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 track.albumName?.takeIf(String::isNotBlank)?.let {
                     Text(it, color = contentColor.copy(alpha = 0.6f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -4308,6 +4361,43 @@ private fun SearchScreen(
     var searchJob by remember { mutableStateOf<Job?>(null) }
     val scope = rememberCoroutineScope()
     val inputFocus = remember { FocusRequester() }
+    val nowPlayingTrackFocus = remember { FocusRequester() }
+    var settleNowPlaying by remember { mutableStateOf(true) }
+    val playbackState by container.playbackController.state.collectAsStateWithLifecycle()
+    val currentGuid = playbackState.queueItems.firstOrNull { it.isCurrent }?.mediaId
+
+    // 点歌：以当前搜索结果的全部歌曲构建完整播放队列（从点击曲目开始），保证播放页“下一首/上一首”有后续歌曲。
+    fun playSearchTracks(tracks: List<Track>, clickedIndex: Int, target: Track) {
+        val playable = tracks.filter(::isTrackPlayable)
+        if (playable.isEmpty()) return
+        val window = boundedQueueWindow(playable, clickedIndex.coerceIn(playable.indices))
+        val queue = container.musicRepository.prepareQueue(window.items)
+        val queueIndex = queue.indexOfFirst { it.track.guid.value == target.guid.value }
+        if (queue.isEmpty() || queueIndex < 0) return
+        settleNowPlaying = true
+        scope.launch {
+            runCatching {
+                container.playbackController.playQueue(tracks = queue, startIndex = queueIndex, autoPlay = true)
+            }.onSuccess { onPlayTrack(target) }
+        }
+    }
+
+    // 从播放页返回（且当前正在播放的歌曲在当前搜索结果中）→ 焦点落到当前播放歌曲行；
+    // 主动搜索/浏览后（settleNowPlaying=false）不再抢焦点。
+    LaunchedEffect(results, currentGuid) {
+        val content = results
+        if (content == null) return@LaunchedEffect
+        if (settleNowPlaying && currentGuid != null) {
+            val index = content.tracks.indexOfFirst { it.guid.value == currentGuid }
+            if (index in 0 until 30) {
+                yield()
+                runCatching { nowPlayingTrackFocus.requestFocus() }
+                settleNowPlaying = false
+                return@LaunchedEffect
+            }
+        }
+        settleNowPlaying = false
+    }
 
     fun runSearch(keyword: String) {
         val trimmed = keyword.trim()
@@ -4320,6 +4410,7 @@ private fun SearchScreen(
                 .onSuccess {
                     results = it
                     searching = false
+                    settleNowPlaying = false
                     // 每次搜索后把诊断信息写入日志文件，可在 设置→崩溃日志 中查看“为什么没搜到”
                     CrashLogStore.appendEntry(
                         context,
@@ -4368,7 +4459,9 @@ private fun SearchScreen(
             }
             results != null -> SearchResultsContent(
                 results = results!!,
-                onPlayTrack = onPlayTrack,
+                currentGuid = currentGuid,
+                nowPlayingTrackFocus = nowPlayingTrackFocus,
+                onPlayTrack = ::playSearchTracks,
                 onOpenPlaylist = onOpenPlaylist,
                 onOpenArtist = onOpenArtist,
                 onOpenAlbum = onOpenAlbum,
@@ -4459,7 +4552,9 @@ private fun SearchField(
 @Composable
 private fun SearchResultsContent(
     results: SearchResults,
-    onPlayTrack: (Track) -> Unit,
+    currentGuid: String?,
+    nowPlayingTrackFocus: FocusRequester,
+    onPlayTrack: (List<Track>, Int, Track) -> Unit,
     onOpenPlaylist: (Playlist) -> Unit,
     onOpenArtist: (Artist) -> Unit,
     onOpenAlbum: (Album) -> Unit,
@@ -4477,8 +4572,17 @@ private fun SearchResultsContent(
                     index = index,
                     track = track,
                     enabled = isTrackPlayable(track),
-                    modifier = Modifier.padding(vertical = 2.dp),
-                    onClick = { onPlayTrack(track) },
+                    nowPlaying = track.guid.value == currentGuid,
+                    modifier = Modifier
+                        .padding(vertical = 2.dp)
+                        .then(
+                            if (track.guid.value == currentGuid) {
+                                Modifier.focusRequester(nowPlayingTrackFocus)
+                            } else {
+                                Modifier
+                            },
+                        ),
+                    onClick = { onPlayTrack(results.tracks, index, track) },
                 )
             }
         }
