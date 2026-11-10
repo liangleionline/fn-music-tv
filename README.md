@@ -7,9 +7,17 @@
 <p align="center">面向 Android TV 与电视盒子的飞牛音乐第三方客户端 · 基于「回声台」二次开发</p>
 
 <p align="center">
-  <a href="https://github.com/liangleionline/fn-music-tv/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/liangleionline/fn-music-tv"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/liangleionline/fn-music-tv"></a>
+  <a href="https://github.com/liangleionline/fn-music-tv/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/liangleionline/fn-music-tv?style=flat-square"></a>
+  <a href="https://github.com/liangleionline/fn-music-tv/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/liangleionline/fn-music-tv/total?style=flat-square&amp;label=Downloads"></a>
+  <a href="https://github.com/liangleionline/fn-music-tv/releases"><img alt="Latest Downloads" src="https://img.shields.io/github/downloads/liangleionline/fn-music-tv/latest/total?style=flat-square&amp;label=Latest"></a>
+  <img alt="Stars" src="https://img.shields.io/github/stars/liangleionline/fn-music-tv?style=flat-square">
+  <img alt="Forks" src="https://img.shields.io/github/forks/liangleionline/fn-music-tv?style=flat-square">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/liangleionline/fn-music-tv?style=flat-square"></a>
+  <img alt="Views" src="https://hits.sh/github.com/liangleionline/fn-music-tv.svg?style=flat-square&amp;label=Views&amp;color=2ea44f">
+  <img alt="Platform" src="https://img.shields.io/badge/Platform-Android%20TV-3DDC84?style=flat-square">
 </p>
+
+<p align="center"><sub>下载量 = GitHub Release 官方统计（累计 / 最新版）；Views = hits.sh 统计的本页加载次数（第三方计数，非 GitHub 官方流量）</sub></p>
 
 ---
 
