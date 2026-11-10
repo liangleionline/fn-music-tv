@@ -161,10 +161,14 @@ cd fn-music-tv
 ```text
 app/             Android TV 应用、Compose 界面与应用集成
 core/model/      音乐库、队列、播放模式等领域模型
-core/data/       服务端 API、会话、本地数据库与缓存
+core/data/       服务端 API、会话、本地数据库（Room + SQLite 歌曲索引）与缓存
 core/lyrics/     在线歌词源、候选评分、歌词解析与匹配编排
 core/playback/   Media3 播放服务与队列
-baselineprofile/ 基准配置生成模块
+baselineprofile/ Baseline Profile 基准配置生成
+contracts/       模块间契约（更新清单等示例定义）
+third_party/     vendored 开源库（Accompanist 歌词组件、Gaze 胶囊、Media3 FLAC 解码等）
+tool/            发布元数据生成等构建辅助脚本
+docs/            文档、界面截图与设计资源
 ```
 
 ## 第三方组件致谢
