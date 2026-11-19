@@ -86,6 +86,40 @@ data class AlbumDto(
 }
 
 @Serializable
+data class AlbumGroupDto(
+    val name: String,
+    val artistName: String? = null,
+    val coverId: String? = null,
+    val trackCount: Int? = null,
+    val releaseDate: String? = null,
+    val guids: List<String> = emptyList(),
+) {
+    fun toDomain(): Album {
+        val source = guids.map(::CollectionGuid)
+        return Album(
+            guid = source.firstOrNull() ?: CollectionGuid(name),
+            name = name,
+            artistName = artistName,
+            coverId = coverId,
+            trackCount = trackCount,
+            releaseDate = releaseDate,
+            guids = source,
+        )
+    }
+
+    companion object {
+        fun of(album: Album) = AlbumGroupDto(
+            name = album.name,
+            artistName = album.artistName,
+            coverId = album.coverId,
+            trackCount = album.trackCount,
+            releaseDate = album.releaseDate,
+            guids = album.sourceGuids.map { it.value }.distinct(),
+        )
+    }
+}
+
+@Serializable
 data class AudioSpecDto(
     val codec: String = "",
     val container: String = "",
@@ -108,6 +142,9 @@ data class TrackDto(
     val audioSpec: AudioSpecDto = AudioSpecDto(),
     val accessStatus: Int? = null,
     val isFavorite: Boolean = false,
+    /** 服务端解析出的碟号 / 曲目号；文件没写标签（或解析不出）时为 null。 */
+    val discNo: Int? = null,
+    val trackNo: Int? = null,
 ) {
     fun toDomain(sourceAudioSpec: AudioSpecDto = audioSpec) = Track(
         guid = TrackGuid(guid),
@@ -121,6 +158,8 @@ data class TrackDto(
         audioFormat = sourceAudioSpec.displayFormat(),
         isFavorite = isFavorite,
         folderPath = sourceAudioSpec.path.trim().takeIf { it.isNotEmpty() },
+        discNo = discNo?.coerceAtLeast(0) ?: 0,
+        trackNo = trackNo?.coerceAtLeast(0) ?: 0,
     )
 }
 

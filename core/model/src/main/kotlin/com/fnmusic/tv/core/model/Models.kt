@@ -40,7 +40,12 @@ data class Album(
     val coverId: String?,
     val trackCount: Int? = null,
     val releaseDate: String? = null,
-)
+    /** 合并后的同名专辑在服务端仍可能是多条（每条一个艺术家）；这里保留全部 guid，详情页据此取回全部曲目。 */
+    val guids: List<CollectionGuid> = emptyList(),
+) {
+    /** 详情页要拉取的服务端专辑 guid 集合（未合并时为自身 guid）。 */
+    val sourceGuids: List<CollectionGuid> get() = guids.ifEmpty { listOf(guid) }
+}
 
 data class Track(
     val guid: TrackGuid,
@@ -54,6 +59,10 @@ data class Track(
     val audioFormat: String? = null,
     val isFavorite: Boolean = false,
     val folderPath: String? = null,
+    /** 碟号（多碟专辑的 CD 序号）；0 表示没有碟号标签。 */
+    val discNo: Int = 0,
+    /** 碟内曲目号；0 表示没有曲目号标签。 */
+    val trackNo: Int = 0,
 )
 
 data class SharedLibrary(

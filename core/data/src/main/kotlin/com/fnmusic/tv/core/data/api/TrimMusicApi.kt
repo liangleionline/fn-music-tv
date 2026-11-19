@@ -120,6 +120,17 @@ class TrimMusicApi(
         authenticated = true,
     )
 
+    /**
+     * 只取音频流的头部若干字节（HTTP Range），用于客户端兜底解析 ID3/FLAC 里的碟号、曲目号。
+     * 服务端忽略 Range 时会退化为完整下载，因此调用方需自行限制使用场景（仅专辑页缺标签时）。
+     */
+    suspend fun audioHead(guid: String, maxBytes: Long = 512_000L): ByteArray = executeBytes(
+        Request.Builder()
+            .url(streamUrl(guid))
+            .header("Range", "bytes=0-${(maxBytes - 1).coerceAtLeast(0)}"),
+        authenticated = true,
+    )
+
     private suspend inline fun <reified T> get(path: String, authenticated: Boolean = true): T =
         execute(Request.Builder().url(server.resolveApi(path)), authenticated)
 

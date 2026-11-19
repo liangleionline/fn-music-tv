@@ -65,7 +65,12 @@ sealed interface QueueSource {
 
     data class Playlist(val guid: String, override val sort: String) : QueueSource
     data class Artist(val guid: String, override val sort: String) : QueueSource
-    data class Album(val guid: String, override val sort: String) : QueueSource
+    data class Album(
+        val guid: String,
+        override val sort: String,
+        /** 同名专辑合并后的全部服务端 guid；为空表示只按 guid 取曲目。 */
+        val guids: List<String> = emptyList(),
+    ) : QueueSource
     data class LibraryAllTracks(override val sort: String) : QueueSource
     data class Favorites(override val sort: String) : QueueSource
 }

@@ -363,8 +363,14 @@ internal fun AuthenticatedApp(
             title = route.album.name,
             subtitle = route.album.artistName.orEmpty(),
             coverId = route.album.coverId,
-            loader = { container.musicRepository.albumTracks(route.album.guid.value, it) },
-            queueSource = { sort -> QueueSource.Album(route.album.guid.value, sort) },
+            loader = { container.musicRepository.albumTracksPage(route.album.sourceGuids.map { it.value }, it) },
+            queueSource = { sort ->
+                QueueSource.Album(
+                    route.album.guid.value,
+                    sort,
+                    route.album.sourceGuids.map { it.value },
+                )
+            },
             onPlayer = { open(LibraryRoute.Player(it)) },
             detailHeader = TrackDetailHeader(
                 kind = "专辑",
@@ -372,6 +378,7 @@ internal fun AuthenticatedApp(
                 declaredTrackCount = route.album.trackCount,
                 onBack = back,
             ),
+            discGrouped = true,
         )
         is LibraryRoute.Player -> {
             // 点击歌曲（文件夹 / 搜索结果等直接 open(Player(track)) 的入口）：
@@ -2959,6 +2966,8 @@ private fun TrackCollection(
     alternateContent: @Composable () -> Unit = {},
     contentRevision: Long = 0L,
     emptyMessage: String = "暂无歌曲",
+    /** 专辑详情：按碟号分组显示（CD1、CD2…，无碟号统一进「＃」组）。 */
+    discGrouped: Boolean = false,
 ) {
     val retainedStore = LocalLibraryRetainedState.current
     val retained = retainedStore.tracks(stateKey)
@@ -3118,7 +3127,8 @@ private fun TrackCollection(
             if (targetKey == currentGuid) {
                 val nowPlayingIndex = tracks.indexOfFirst { it.guid.value == targetKey }
                 if (nowPlayingIndex >= 0) {
-                    runCatching { listState.scrollToItem(nowPlayingIndex.coerceAtLeast(0)) }
+                    val lazyIndex = lazyIndexForTrackIndex(nowPlayingIndex, tracks, discGrouped)
+                    runCatching { listState.scrollToItem(lazyIndex.coerceAtLeast(0)) }
                 }
             }
             repeat(3) {
@@ -3162,6 +3172,7 @@ private fun TrackCollection(
         onLoadMore = { load(page + 1) },
         alternateContent = alternateContent,
         emptyMessage = emptyMessage,
+        discGrouped = discGrouped,
     )
 }
 
@@ -3191,6 +3202,7 @@ private fun DetailTrackCollection(
     onLoadMore: () -> Unit,
     alternateContent: @Composable () -> Unit,
     emptyMessage: String,
+    discGrouped: Boolean = false,
 ) {
     Column(Modifier.fillMaxSize().padding(horizontal = 42.dp, vertical = 24.dp)) {
         Row(Modifier.fillMaxWidth().height(184.dp), verticalAlignment = Alignment.Top) {
@@ -3310,17 +3322,44 @@ private fun DetailTrackCollection(
                         )
                     }
                 }
-                itemsIndexed(tracks, key = { _, track -> track.guid.value }) { index, track ->
-                    DetailTrackRow(
-                        index = index,
-                        track = track,
-                        enabled = isTrackPlayable(track),
-                        nowPlaying = track.guid.value == currentGuid,
-                        modifier = Modifier
-                            .then(if (focusedKey == track.guid.value) Modifier.focusRequester(restoredFocus) else Modifier)
-                            .onFocusChanged { if (it.isFocused) onTrackFocused(index, track.guid.value) },
-                        onClick = { onTrack(index) },
-                    )
+                if (discGrouped) {
+                    var previousDisc: Int? = null
+                    var positionInDisc = 0
+                    tracks.forEachIndexed { index, track ->
+                        val disc = discGroupOf(track)
+                        if (previousDisc == null || disc != previousDisc) {
+                            positionInDisc = 0
+                            item(key = "disc-header-$index") { DetailDiscHeader(disc) }
+                            previousDisc = disc
+                        }
+                        positionInDisc += 1
+                        item(key = track.guid.value) {
+                            DetailTrackRow(
+                                index = index,
+                                track = track,
+                                numberLabel = if (track.trackNo > 0) track.trackNo else positionInDisc,
+                                enabled = isTrackPlayable(track),
+                                nowPlaying = track.guid.value == currentGuid,
+                                modifier = Modifier
+                                    .then(if (focusedKey == track.guid.value) Modifier.focusRequester(restoredFocus) else Modifier)
+                                    .onFocusChanged { if (it.isFocused) onTrackFocused(index, track.guid.value) },
+                                onClick = { onTrack(index) },
+                            )
+                        }
+                    }
+                } else {
+                    itemsIndexed(tracks, key = { _, track -> track.guid.value }) { index, track ->
+                        DetailTrackRow(
+                            index = index,
+                            track = track,
+                            enabled = isTrackPlayable(track),
+                            nowPlaying = track.guid.value == currentGuid,
+                            modifier = Modifier
+                                .then(if (focusedKey == track.guid.value) Modifier.focusRequester(restoredFocus) else Modifier)
+                                .onFocusChanged { if (it.isFocused) onTrackFocused(index, track.guid.value) },
+                            onClick = { onTrack(index) },
+                        )
+                    }
                 }
                 if (hasNext) {
                     item {
@@ -3445,6 +3484,40 @@ private fun DetailTabButton(label: String, selected: Boolean, modifier: Modifier
     }
 }
 
+/** 碟号分组：0 表示没有碟号标签，统一进「＃」组。 */
+private fun discGroupOf(track: Track): Int = if (track.discNo > 0) track.discNo else 0
+
+/** 曲目下标 → LazyColumn 项下标（碟号分组时每组前置一个分组标题）。 */
+internal fun lazyIndexForTrackIndex(index: Int, tracks: List<Track>, discGrouped: Boolean): Int {
+    if (!discGrouped) return index
+    if (index <= 0) return if (tracks.isEmpty()) 0 else 1
+    var headers = 0
+    var previous: Int? = null
+    val last = index.coerceAtMost(tracks.lastIndex)
+    for (i in 0..last) {
+        val disc = discGroupOf(tracks[i])
+        if (previous == null || disc != previous) headers += 1
+        previous = disc
+    }
+    return index + headers
+}
+
+/** 碟号分组标题：CD1、CD2…；没有碟号的组显示「＃」。 */
+@Composable
+private fun DetailDiscHeader(disc: Int) {
+    Box(
+        Modifier.fillMaxWidth().height(36.dp).padding(horizontal = 15.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(
+            text = if (disc > 0) "CD$disc" else "＃",
+            color = FnColors.Muted,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
 @Composable
 private fun DetailTrackColumnHeader() {
     Row(
@@ -3465,8 +3538,11 @@ private fun DetailTrackRow(
     enabled: Boolean,
     nowPlaying: Boolean = false,
     modifier: Modifier = Modifier,
+    /** 碟内曲目号（专辑按碟分组时传入）；为空时退回列表序号。 */
+    numberLabel: Int? = null,
     onClick: () -> Unit,
 ) {
+    val displayNumber = numberLabel ?: (index + 1)
     val shape = RoundedCornerShape(10.dp)
     Button(
         enabled = enabled,
@@ -3475,7 +3551,7 @@ private fun DetailTrackRow(
             .fillMaxWidth()
             .height(58.dp)
             .semantics {
-                contentDescription = "${index + 1}. ${track.title} ${track.artistName.orEmpty()}"
+                contentDescription = "$displayNumber. ${track.title} ${track.artistName.orEmpty()}"
             },
         shape = ButtonDefaults.shape(shape, shape, shape, shape, shape),
         scale = ButtonDefaults.scale(focusedScale = 1f),
@@ -3494,7 +3570,7 @@ private fun DetailTrackRow(
         val contentColor = LocalContentColor.current
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                if (nowPlaying) "▶" else (index + 1).toString().padStart(2, '0'),
+                if (nowPlaying) "▶" else displayNumber.toString().padStart(2, '0'),
                 color = if (nowPlaying) FnColors.Coral else contentColor.copy(alpha = 0.66f),
                 fontSize = 13.sp,
                 fontWeight = if (nowPlaying) FontWeight.Bold else FontWeight.Normal,

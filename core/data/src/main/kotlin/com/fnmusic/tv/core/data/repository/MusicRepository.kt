@@ -3,6 +3,7 @@ package com.fnmusic.tv.core.data.repository
 import android.content.Context
 import android.graphics.BitmapFactory
 import com.fnmusic.tv.core.data.api.AlbumDto
+import com.fnmusic.tv.core.data.api.AlbumGroupDto
 import com.fnmusic.tv.core.data.api.ApiDecoder
 import com.fnmusic.tv.core.data.api.ArtistDto
 import com.fnmusic.tv.core.data.api.LyricListDto
@@ -13,6 +14,7 @@ import com.fnmusic.tv.core.data.api.SortedPageListDto
 import com.fnmusic.tv.core.data.api.TrackDto
 import com.fnmusic.tv.core.data.api.TrackMetadataDto
 import com.fnmusic.tv.core.data.api.isRetryableRequestFailure
+import com.fnmusic.tv.core.data.audio.AudioTagReader
 import com.fnmusic.tv.core.data.local.CachedIndexEntity
 import com.fnmusic.tv.core.data.local.CachedLyricEntity
 import com.fnmusic.tv.core.data.local.CachedPageEntity
@@ -41,6 +43,8 @@ import com.fnmusic.tv.core.lyrics.LyricsMatchResult
 import com.fnmusic.tv.core.lyrics.hasUsableLines
 import com.fnmusic.tv.core.lyrics.parseLyrics
 import com.mocharealm.accompanist.lyrics.core.model.SyncedLyrics
+import java.text.Collator
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -82,6 +86,24 @@ private const val SEARCH_MAX_PAGES = 500
 
 /** 歌曲搜索索引（预计算拼音）在本地 cache_index 表中的键名。 */
 private const val SEARCH_TRACK_INDEX_KEY = "search_track_index_v1"
+
+/** 合并后专辑清单的本地缓存键（按专辑名归并，避免同一专辑因艺术家不同被拆成多张）。 */
+private const val MERGED_ALBUM_INDEX_KEY = "albums_merged_v1"
+
+/** 合并后专辑列表的排序标识。 */
+const val MERGED_ALBUM_SORT = "mergedName,asc"
+
+/** 专辑详情（按碟号分组后）的排序标识。 */
+const val ALBUM_DISC_SORT = "discTrack,asc"
+
+/** 专辑详情逐页拉取曲目时的单页大小（拉全量后本地排序再切片）。 */
+private const val ALBUM_TRACK_FETCH_PAGE_SIZE = 100
+
+/** 专辑曲目全量排序结果的缓存有效期：5 分钟内反复进出专辑页不再重复拉取/解析标签。 */
+private const val ALBUM_TRACK_CACHE_TTL_MS = 5L * 60 * 1000
+
+/** 同时解析音频头部标签的并发数（低端电视/NAS 都吃得消）。 */
+private const val AUDIO_TAG_PARSE_CONCURRENCY = 4
 
 /** 歌曲搜索索引的刷新周期：超过该时长后在后台静默重建（不阻塞搜索）。 */
 private const val SEARCH_INDEX_TTL_MS = 7L * 24 * 60 * 60 * 1000
@@ -518,12 +540,69 @@ class MusicRepository internal constructor(
         fetch = { session.authenticated { it.artistAlbums(guid, page) } },
     ) { it.toDomain() }
 
-    suspend fun albums(page: Int, size: Int = 50) = cachedPage<AlbumDto, Album>(
+    /**
+     * 专辑列表：按专辑名合并后本地分页。
+     *
+     * 飞牛把「同一张专辑 + 不同艺术家」存成多条 album（各自一个 guid），直接透传会把一张专辑
+     * 拆成多张卡片。这里按专辑名（trim + lowercase）归并成一张，艺术家名合并展示，
+     * 并保留全部 guid 供详情页取回完整曲目。
+     */
+    suspend fun albums(page: Int, size: Int = 50): Page<Album> {
+        val all = mergedAlbumCatalog()
+        val from = (page.coerceAtLeast(1) - 1) * size
+        val items = if (from >= all.size) {
+            emptyList()
+        } else {
+            all.subList(from, minOf(from + size, all.size)).toList()
+        }
+        return Page(items, page, size, all.size, MERGED_ALBUM_SORT)
+    }
+
+    /** 单个服务端专辑页（未合并）：分页缓存 + 磁盘回退；仅供合并清单与搜索索引复用。 */
+    private suspend fun albumPage(page: Int, size: Int = 50): Page<Album> = cachedPage<AlbumDto, Album>(
         sourceKey = sizedPageSourceKey("albums", size),
         page = page,
         pageSize = size,
         fetch = { session.authenticated { it.albums(page, size) } },
     ) { it.toDomain() }
+
+    /** 全量专辑按名称归并；结果落盘缓存（账号隔离），冷启动直接复用。 */
+    private suspend fun mergedAlbumCatalog(forceRefresh: Boolean = false): List<Album> =
+        cachedIndex<List<AlbumGroupDto>, List<Album>>(
+            key = MERGED_ALBUM_INDEX_KEY,
+            forceRefresh = forceRefresh,
+            fetch = {
+                val all = loadFullCatalog(
+                    pageLoader = { page, size -> albumPage(page, size) },
+                    idOf = { it.guid.value },
+                )
+                mergeAlbums(all).map(AlbumGroupDto::of)
+            },
+        ) { groups -> groups.map(AlbumGroupDto::toDomain) }
+
+    private fun mergeAlbums(all: List<Album>): List<Album> {
+        val groups = LinkedHashMap<String, MutableList<Album>>()
+        all.forEach { album ->
+            val key = album.name.trim().lowercase().ifBlank { "#${album.guid.value}" }
+            groups.getOrPut(key) { mutableListOf() }.add(album)
+        }
+        return groups.values.map { list ->
+            val first = list.first()
+            val artists = list.flatMap { album ->
+                album.artistName.orEmpty().split(" / ").map(String::trim).filter(String::isNotEmpty)
+            }.distinct()
+            val trackCount = list.sumOf { it.trackCount ?: 0 }.takeIf { it > 0 }
+            Album(
+                guid = first.guid,
+                name = first.name,
+                artistName = artists.takeIf { it.isNotEmpty() }?.joinToString(" / "),
+                coverId = list.firstNotNullOfOrNull { it.coverId?.takeIf(String::isNotBlank) },
+                trackCount = trackCount,
+                releaseDate = list.firstNotNullOfOrNull { it.releaseDate?.takeIf(String::isNotBlank) },
+                guids = list.map { it.guid }.distinct(),
+            )
+        }
+    }
 
     suspend fun album(guid: String): Album = cachedIndex<AlbumDto, Album>(
         key = "album:$guid",
@@ -535,6 +614,131 @@ class MusicRepository internal constructor(
         page = page,
         fetch = { session.authenticated { it.albumTracks(guid, page) } },
     ) { it.toDomain() }.also(::observeFavoriteTracks)
+
+    /**
+     * 专辑详情曲目：把同名专辑的全部服务端 guid 的曲目拉全，按「碟号分组 + 曲目号/标题/文件名」
+     * 本地排序后切片分页。顺序稳定，播放队列（exactTrackQueueWindow）与页面展示一致。
+     *
+     * 服务端对没有写碟号/曲目号标签的文件返回 null，这里用 HTTP Range 读音频头部（ID3/FLAC）
+     * 兜底解析；解析不出来的曲目按「无碟号」处理，统一进「＃」组。
+     */
+    suspend fun albumTracksPage(
+        guids: List<String>,
+        page: Int,
+        size: Int = PAGE_SIZE,
+        sort: String = ALBUM_DISC_SORT,
+    ): Page<Track> {
+        val all = albumTracksSorted(guids)
+        val from = (page.coerceAtLeast(1) - 1) * size
+        val items = if (from >= all.size) {
+            emptyList()
+        } else {
+            all.subList(from, minOf(from + size, all.size)).toList()
+        }
+        return Page(items, page, size, all.size, sort)
+    }
+
+    private data class CachedAlbumSongs(
+        val namespace: String,
+        val tracks: List<Track>,
+        val loadedAt: Long,
+    )
+
+    private val albumTrackMutex = Mutex()
+    private val albumTrackCache = LinkedHashMap<String, CachedAlbumSongs>()
+
+    private suspend fun albumTracksSorted(guids: List<String>): List<Track> {
+        val namespace = session.cacheNamespace()
+        val key = "${namespace}|${guids.sorted().joinToString(",")}"
+        return albumTrackMutex.withLock {
+            val cached = albumTrackCache[key]
+            if (cached != null && now() - cached.loadedAt < ALBUM_TRACK_CACHE_TTL_MS) return@withLock cached.tracks
+            val tracks = withContext(Dispatchers.IO) {
+                val fetched = fetchAlbumTracks(guids)
+                sortAlbumTracks(withDiscTrackTags(fetched))
+            }
+            if (albumTrackCache.size >= 12) {
+                albumTrackCache.keys.firstOrNull()?.let(albumTrackCache::remove)
+            }
+            albumTrackCache[key] = CachedAlbumSongs(namespace, tracks, now())
+            tracks
+        }
+    }
+
+    private suspend fun fetchAlbumTracks(guids: List<String>): List<Track> {
+        val merged = LinkedHashMap<String, Track>()
+        guids.forEach { guid ->
+            var page = 1
+            while (true) {
+                val response = session.authenticated { it.albumTracks(guid, page, ALBUM_TRACK_FETCH_PAGE_SIZE) }
+                response.list.forEach { dto -> merged.putIfAbsent(dto.guid, dto.toDomain()) }
+                val fetched = page * ALBUM_TRACK_FETCH_PAGE_SIZE
+                if (response.list.isEmpty() || response.list.size < ALBUM_TRACK_FETCH_PAGE_SIZE || fetched >= response.total) break
+                page += 1
+            }
+        }
+        return merged.values.toList()
+    }
+
+    /** 对服务端没有碟号/曲目号的曲目读音频头部标签兜底；并发受限，失败按无标签处理。 */
+    private suspend fun withDiscTrackTags(tracks: List<Track>): List<Track> {
+        val need = tracks.filter { it.discNo <= 0 || it.trackNo <= 0 }
+        if (need.isEmpty()) return tracks
+        val resolved = HashMap<String, Pair<Int, Int>>()
+        coroutineScope {
+            need.chunked(AUDIO_TAG_PARSE_CONCURRENCY).forEach { chunk ->
+                chunk.map { track ->
+                    async {
+                        val cached = AudioTagReader.cached(track.guid.value)
+                        val pair = cached ?: runCatching {
+                            val head = session.authenticated { it.audioHead(track.guid.value) }
+                            AudioTagReader.parse(head).also { AudioTagReader.put(track.guid.value, it) }
+                        }.getOrDefault(0 to 0)
+                        if (pair.first > 0 || pair.second > 0) {
+                            synchronized(resolved) { resolved[track.guid.value] = pair }
+                        }
+                    }
+                }.forEach { it.await() }
+            }
+        }
+        return tracks.map { track ->
+            val pair = resolved[track.guid.value] ?: return@map track
+            track.copy(
+                discNo = if (track.discNo > 0) track.discNo else pair.first,
+                trackNo = if (track.trackNo > 0) track.trackNo else pair.second,
+            )
+        }
+    }
+
+    /** 排序规则：有碟号的按碟号升序在前（CD1、CD2…），无碟号统一进最后的「＃」组；
+     *  组内按曲目号升序（无曲目号的排在有号的之后），再按标题、标题为空按文件名。 */
+    private fun sortAlbumTracks(tracks: List<Track>): List<Track> {
+        val collator = Collator.getInstance(Locale.CHINA)
+        val byDisc = LinkedHashMap<Int, MutableList<Track>>()
+        tracks.forEach { track ->
+            val disc = if (track.discNo > 0) track.discNo else 0
+            byDisc.getOrPut(disc) { mutableListOf() }.add(track)
+        }
+        fun sortKey(track: Track): String = track.title.trim().ifBlank { fileNameOf(track) }
+        val comparator = Comparator<Track> { a, b ->
+            val ta = if (a.trackNo > 0) a.trackNo else Int.MAX_VALUE
+            val tb = if (b.trackNo > 0) b.trackNo else Int.MAX_VALUE
+            if (ta != tb) {
+                ta.compareTo(tb)
+            } else {
+                val byName = collator.compare(sortKey(a), sortKey(b))
+                if (byName != 0) byName else a.guid.value.compareTo(b.guid.value)
+            }
+        }
+        val discs = byDisc.keys.filter { it > 0 }.sorted() + byDisc.keys.filter { it <= 0 }.sorted()
+        return discs.flatMap { disc -> byDisc.getValue(disc).sortedWith(comparator) }
+    }
+
+    private fun fileNameOf(track: Track): String {
+        val path = track.folderPath.orEmpty()
+        val name = path.substringAfterLast('/').substringAfterLast('\\').trim()
+        return name.ifBlank { track.title.trim() }
+    }
 
     suspend fun allTracks(page: Int) = cachedPage<TrackDto, Track>(
         sourceKey = "all-tracks",
@@ -585,7 +789,11 @@ class MusicRepository internal constructor(
     suspend fun queuePage(source: QueueSource, page: Int): Page<Track> = when (source) {
         is QueueSource.Playlist -> playlistTracks(source.guid, page)
         is QueueSource.Artist -> artistTracks(source.guid, page)
-        is QueueSource.Album -> albumTracks(source.guid, page)
+        is QueueSource.Album -> albumTracksPage(
+            guids = source.guids.ifEmpty { listOf(source.guid) },
+            page = page,
+            sort = source.sort,
+        )
         is QueueSource.LibraryAllTracks -> allTracks(page)
         is QueueSource.Favorites -> favoriteTracks(page)
     }
@@ -928,10 +1136,8 @@ class MusicRepository internal constructor(
                 pageLoader = { page, size -> artists(page, size) },
                 idOf = { it.guid.value },
             )
-            searchAlbums = namespace to loadFullCatalog(
-                pageLoader = { page, size -> albums(page, size) },
-                idOf = { it.guid.value },
-            )
+            // 专辑搜索索引同样使用「按名称合并」后的清单，避免同一专辑在搜索结果里重复出现。
+            searchAlbums = namespace to mergedAlbumCatalog()
         }
     }
 

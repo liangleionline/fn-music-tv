@@ -295,6 +295,8 @@ internal object PlaybackSnapshotCodec {
         .put("audioFormat", track.audioFormat ?: JSONObject.NULL)
 
     private fun decodeTrack(value: JSONObject): Track = Track(
+        discNo = value.optNullableInt("discNo")?.coerceAtLeast(0) ?: 0,
+        trackNo = value.optNullableInt("trackNo")?.coerceAtLeast(0) ?: 0,
         guid = TrackGuid(value.getString("guid").also { require(it.isNotBlank()) }),
         title = value.getString("title"),
         artistName = value.optNullableString("artist"),
@@ -328,6 +330,11 @@ internal object PlaybackSnapshotCodec {
             },
         )
         .put("sort", source.sort)
+        .apply {
+            (source as? QueueSource.Album)?.guids?.takeIf { it.isNotEmpty() }?.let { guids ->
+                put("guids", org.json.JSONArray(guids))
+            }
+        }
 
     private fun decodeSource(value: JSONObject): QueueSource {
         val sort = value.getString("sort")
@@ -335,7 +342,13 @@ internal object PlaybackSnapshotCodec {
         return when (value.getString("kind")) {
             "playlist" -> QueueSource.Playlist(guid.also { require(it.isNotBlank()) }, sort)
             "artist" -> QueueSource.Artist(guid.also { require(it.isNotBlank()) }, sort)
-            "album" -> QueueSource.Album(guid.also { require(it.isNotBlank()) }, sort)
+            "album" -> QueueSource.Album(
+                guid.also { require(it.isNotBlank()) },
+                sort,
+                value.optJSONArray("guids")?.let { array ->
+                    buildList { for (i in 0 until array.length()) array.optString(i).takeIf(String::isNotBlank)?.let(::add) }
+                }.orEmpty(),
+            )
             "all" -> QueueSource.LibraryAllTracks(sort)
             "favorites" -> QueueSource.Favorites(sort)
             else -> error("Unknown playback queue source")
