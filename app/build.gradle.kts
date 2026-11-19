@@ -32,6 +32,8 @@ val allowUnsignedRelease = providers.gradleProperty("allowUnsignedRelease").orNu
 val updateManifestUrl = providers.gradleProperty("fnMusicUpdateManifestUrl").orNull
     ?: providers.environmentVariable("FN_MUSIC_UPDATE_MANIFEST_URL").orNull
     ?: ""
+val updateGithubReleasesApi = providers.gradleProperty("fnMusicUpdateGithubApi").orNull
+    ?: "https://api.github.com/repos/liangleionline/fn-music-tv/releases/latest"
 val flacDecoderAar = rootProject.file(
     "third_party/media3-decoder-flac/media3-decoder-flac-1.10.1-libflac-1.5.0.aar",
 )
@@ -71,11 +73,13 @@ android {
             dimension = "distribution"
             buildConfigField("boolean", "SELF_UPDATE_ENABLED", "true")
             buildConfigField("String", "UPDATE_MANIFEST_URL", updateManifestUrl.asBuildConfigString())
+            buildConfigField("String", "UPDATE_GITHUB_RELEASES_API", updateGithubReleasesApi.asBuildConfigString())
         }
         create("store") {
             dimension = "distribution"
             buildConfigField("boolean", "SELF_UPDATE_ENABLED", "false")
             buildConfigField("String", "UPDATE_MANIFEST_URL", "".asBuildConfigString())
+            buildConfigField("String", "UPDATE_GITHUB_RELEASES_API", "".asBuildConfigString())
         }
     }
 
@@ -131,6 +135,17 @@ base {
     archivesName.set("fn-music-tv-$managedVersionName")
 }
 
+// Robolectric 默认从 Maven 中央仓库拉 android-all 依赖，国内直连常卡死；
+// 统一让单元测试走镜像，可用 -ProbolectricDependencyRepo 覆盖。
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    systemProperty("robolectric.dependency.repo.id", "mirror")
+    systemProperty(
+        "robolectric.dependency.repo.url",
+        providers.gradleProperty("robolectricDependencyRepo").orNull
+            ?: "https://maven.aliyun.com/repository/public",
+    )
+}
+
 val verifyReleaseSigning by tasks.registering {
     group = "verification"
     description = "Verifies the local Fn Music TV release signing identity."
@@ -147,16 +162,27 @@ val verifyReleaseSigning by tasks.registering {
 
 val verifySideloadUpdateConfiguration by tasks.registering {
     group = "verification"
-    description = "Verifies the sideload release update manifest URL."
+    description = "Verifies the sideload release update source (GitHub latest release API)."
     doLast {
-        val parsed = runCatching { URI(updateManifestUrl) }.getOrNull()
+        val github = runCatching { URI(updateGithubReleasesApi) }.getOrNull()
         check(
-            parsed?.scheme.equals("https", ignoreCase = true) &&
-                !parsed?.host.isNullOrBlank() &&
-                parsed?.userInfo == null &&
-                parsed?.fragment == null,
+            github?.scheme.equals("https", ignoreCase = true) &&
+                !github?.host.isNullOrBlank() &&
+                github?.userInfo == null &&
+                github?.fragment == null,
         ) {
-            "Sideload Release requires an HTTPS fnMusicUpdateManifestUrl without credentials or fragments."
+            "Sideload Release requires an HTTPS fnMusicUpdateGithubApi without credentials or fragments."
+        }
+        if (updateManifestUrl.isNotBlank()) {
+            val parsed = runCatching { URI(updateManifestUrl) }.getOrNull()
+            check(
+                parsed?.scheme.equals("https", ignoreCase = true) &&
+                    !parsed?.host.isNullOrBlank() &&
+                    parsed?.userInfo == null &&
+                    parsed?.fragment == null,
+            ) {
+                "fnMusicUpdateManifestUrl must be an HTTPS URL without credentials or fragments."
+            }
         }
     }
 }

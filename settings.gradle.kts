@@ -7,21 +7,22 @@ pluginManagement {
         }
     }
     repositories {
+        // 国内网络直连 Maven 中央仓库经常卡在数十 MB 的依赖下载上，镜像放在最前面
+        maven("https://maven.aliyun.com/repository/google")
+        maven("https://maven.aliyun.com/repository/central")
         google()
         mavenCentral()
         gradlePluginPortal()
-        maven("https://maven.aliyun.com/repository/google")
-        maven("https://maven.aliyun.com/repository/central")
     }
 }
 
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        google()
-        mavenCentral()
         maven("https://maven.aliyun.com/repository/google")
         maven("https://maven.aliyun.com/repository/central")
+        google()
+        mavenCentral()
     }
 }
 

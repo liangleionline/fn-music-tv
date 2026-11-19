@@ -8,6 +8,24 @@
 
 > **Release 保留策略**：GitHub Release 区只保留最近 **3 个**版本，更早版本的说明保留在本文件中；如需旧版安装包，可从对应 tag 的源码自行构建。
 
+## 1.2.15 - 2026-11-19（VERSION_CODE 49）
+
+### 新增（应用内更新改为读取本仓库 GitHub Release）
+
+- **设置页「检查更新」改为直接查本仓库最新 Release**：请求 `https://api.github.com/repos/liangleionline/fn-music-tv/releases/latest`，从资产列表读取 `update.json` 作为更新清单；不再依赖外部自定义清单地址（旧清单地址仅作回退保留）。
+- **每次打开 App 自动检查**：启动进入前台时后台静默检查一次，发现新版本弹窗提醒（可「忽略此版本」或「稍后」）；从后台回到前台时，距上次检查超过 30 分钟也会再查一次（避免 GitHub 未认证接口 60 次/小时的限制），此外每 12 小时定时检查一次；设置页按钮随时可手动检查。
+- **更新包改走 GitHub 官方直链**：从 Release 资产取 APK 的 `browser_download_url` 下载；自动跟随 GitHub 的 302 跳转（`github.com` → `objects.githubusercontent.com` / `release-assets.githubusercontent.com`），每一跳都要求 HTTPS 且只允许落在 GitHub 受信域名上，其他跳转一律拒绝。
+- **校验标准不变**：安装包的应用包名、`versionCode`、签名一致性，以及文件大小与 SHA-256 全部校验通过才允许安装。
+- **Release 说明适配弹窗排版**：弹窗正文取 Release 的 name 与 body，Markdown 的粗体、行内代码、链接与分隔线会被清洗成可读文本，`#` 标题与 `-` 列表仍按既有排版分组显示。
+
+### 发版规范（维护者必读）
+
+- 每个 Release 除 APK 与 `.sha256` 外，**必须同时上传 `update.json`**，字段与客户端校验一一对应：
+  `schemaVersion`（固定 1）、`packageName`（`com.fnmusic.tv`）、`versionName`、`versionCode`、
+  `title`、`notes`、`apk.url`（GitHub 直链）、`apk.size`、`apk.sha256`（小写 64 位）、
+  `publishedAt`（ISO-8601，如 `2026-11-19T03:00:00Z`）、`githubReleaseUrl`。
+- 缺少 `update.json` 时客户端会明确提示「最新版本缺少 update.json」，不会静默失败。
+
 ## 1.2.14 - 2026-10-24（VERSION_CODE 48）
 
 ### 修复（专辑页）

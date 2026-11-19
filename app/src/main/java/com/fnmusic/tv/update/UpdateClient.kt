@@ -7,13 +7,8 @@ import java.text.ParsePosition
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -132,16 +127,3 @@ private fun defaultUpdateHttpClient() = OkHttpClient.Builder()
     .readTimeout(20, TimeUnit.SECONDS)
     .callTimeout(30, TimeUnit.SECONDS)
     .build()
-
-private suspend fun Call.await(): Response = suspendCancellableCoroutine { continuation ->
-    continuation.invokeOnCancellation { cancel() }
-    enqueue(object : Callback {
-        override fun onFailure(call: Call, e: IOException) {
-            if (continuation.isActive) continuation.resumeWithException(e)
-        }
-
-        override fun onResponse(call: Call, response: Response) {
-            if (continuation.isActive) continuation.resume(response) else response.close()
-        }
-    })
-}

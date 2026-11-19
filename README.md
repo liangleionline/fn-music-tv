@@ -26,7 +26,7 @@
 本仓库是开源项目 **回声台**（[QiaoKes/fn-music-tv](https://github.com/QiaoKes/fn-music-tv)）的**二次开发分支（fork）**。
 
 - 原项目由 [QiaoKes](https://github.com/QiaoKes) 开发维护，使用 Kotlin、Compose for TV 与 Media3 构建，是针对电视大屏、横屏布局、遥控器和触屏操作做了专门适配的飞牛音乐第三方 Android TV 客户端。
-- 本分支以原作者 **v1.1.2** 代码为基线，围绕**电视端搜索、文件夹浏览、歌单管理、播放体验与可维护性**做了一系列增强与修复，目前已发布至 **v1.2.14**（版本线：v1.1.2 增强版 → v1.1.3 … v1.1.8 → v1.2.1 … v1.2.14）。
+- 本分支以原作者 **v1.1.2** 代码为基线，围绕**电视端搜索、文件夹浏览、歌单管理、播放体验与可维护性**做了一系列增强与修复，目前已发布至 **v1.2.15**（版本线：v1.1.2 增强版 → v1.1.3 … v1.1.8 → v1.2.1 … v1.2.15）。
 - 与原项目相同，本项目也是**第三方客户端，与飞牛官方无关**。使用前请确保已部署可访问的飞牛音乐服务，并遵守相关服务条款。
 
 > 感谢原作者 QiaoKes 的出色工作。如果本增强版对你有帮助，也欢迎回到原仓库给原作者一个 Star。
@@ -35,6 +35,7 @@
 
 | 版本 | 日期 | 主要内容 |
 | --- | --- | --- |
+| **v1.2.15** | 2026-11-19 | 应用内更新改为读取本仓库最新 GitHub Release：打开 App 自动检查、设置页可手动检查，有更新弹窗提醒，APK 走 GitHub 官方直链下载（自动跟随受信任跳转），签名/大小/SHA-256 校验不变 |
 | **v1.2.14** | 2026-10-24 | 专辑按专辑名合并（同一专辑不同艺术家不再拆成多张卡片）；专辑详情按碟号分组（CD1/CD2…，无碟号进「＃」组），组内按曲目号→标题→文件名排序；服务端无标签时用 HTTP Range 读 ID3/FLAC 兜底解析碟号与曲目号 |
 | **v1.2.13** | 2026-10-24 | 修复上一版启动闪退（数据库索引声明与迁移脚本不一致）；文件夹索引直读方案随之稳定生效 |
 | **v1.2.12** | 2026-10-24 | 歌曲索引改为 SQLite 结构化直存，取代 4~8MB 大 JSON 编解码：文件夹冷启动从 61 秒降到秒级 |
@@ -73,10 +74,11 @@
 - **歌单管理增强**（本分支）：首页歌单模块、全部歌单长按排序、我的页同步自建歌单。
 - **本地搜索**（本分支）：中文 / 英文 / 拼音全拼 / 拼音首字母，覆盖歌曲、歌手、歌单、专辑；**预计算拼音索引，毫秒级出结果**。
 - **崩溃日志**（本分支）：设置页一键查看最近崩溃堆栈与系统进程退出原因。
+- **应用内更新**（本分支）：每次打开 App 自动读取本仓库最新 Release，有新版弹窗提醒（可忽略某版本）；设置页「检查更新」可随时手动检查，更新包经 GitHub 官方直链下载，并校验包名、版本号、签名与 SHA-256。
 
 ## 下载与安装
 
-前往本仓库 [Releases](https://github.com/liangleionline/fn-music-tv/releases) 下载最新版 APK（当前最新为 `fn-music-tv-1.2.14-sideload-release.apk`）。
+前往本仓库 [Releases](https://github.com/liangleionline/fn-music-tv/releases) 下载最新版 APK（当前最新为 `fn-music-tv-1.2.15-sideload-release.apk`）。
 
 > **版本保留策略**：Release 区只保留最近 **3 个**版本，更早的版本会定期下线；如需历史版本，可从 git 提交历史自行构建。
 
@@ -84,7 +86,7 @@
 - 可通过 U 盘、文件管理器或 ADB 安装：
 
   ```sh
-  adb install fn-music-tv-1.2.14-sideload-release.apk
+  adb install fn-music-tv-1.2.15-sideload-release.apk
   ```
 
 - 若系统拦截安装，请在设备设置中允许当前文件管理器或安装工具「安装未知应用」。
@@ -156,6 +158,32 @@ cd fn-music-tv
 ```
 
 调试产物位于 `app/build/outputs/apk/sideload/debug/`。发布版（sideloadRelease）需要使用私有签名密钥，请在本地自行配置后构建。
+
+## 发布流程（维护者）
+
+客户端的「检查更新」只读**本仓库最新 Release**，因此每次发版除 APK 外，还必须上传 `update.json`：
+
+1. 提升 `version.properties` 中的 `VERSION_CODE` 与 `VERSION_NAME`（包内版本号，客户端据此判断是否为新版本）。
+2. 构建发布包：`:app:assembleSideloadRelease`，产物在 `app/build/outputs/apk/sideload/release/`。
+3. 生成更新清单（版本号取自 `version.properties`，大小与 SHA-256 直接读 APK）：
+
+   ```powershell
+   pwsh tool/update-manifest/generate-update-json.ps1 `
+     -ApkPath app/build/outputs/apk/sideload/release/fn-music-tv-1.2.15-sideload-release.apk `
+     -ReleaseTag v1.2.15 `
+     -OutputPath update.json
+   ```
+
+4. 创建 Release（标题 `vX.Y.Z`，正文写更新说明，客户端弹窗直接展示），并上传三个资产：
+   `fn-music-tv-X.Y.Z-sideload-release.apk`、同名的 `.sha256`、`update.json`。
+5. 同步更新 README、CHANGELOG 与仓库 About 描述。
+6. Release 区只保留最近 3 个版本，更早的连同 tag 一起删除（说明保留在 CHANGELOG）。
+
+`update.json` 字段与客户端校验一一对应：`schemaVersion`（固定 1）、`packageName`、`versionName`、
+`versionCode`、`title`、`notes`、`apk.url`（GitHub 直链）、`apk.size`、`apk.sha256`（小写 64 位）、
+`publishedAt`（ISO-8601）、`githubReleaseUrl`。任何一项缺失或不合法，客户端都会明确提示而不是静默失败。
+
+客户端下载后仍会做二次校验：文件大小与 SHA-256、安装包包名、`versionCode` 是否高于当前版本、签名是否一致，全部通过才交给系统安装程序。
 
 ## 项目结构
 

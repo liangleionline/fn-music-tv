@@ -30,3 +30,6 @@ Thumbs.db
 # Cloudflare publisher tool and deployment state stay local
 **/node_modules/
 tool/update-publisher/
+
+# Local build/test scratch logs
+/*.log

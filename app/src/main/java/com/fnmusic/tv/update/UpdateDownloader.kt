@@ -38,21 +38,21 @@ internal class UpdateDownloader(
         val verified = File(directory, "${manifest.versionCode}.apk")
         partial.delete()
         verified.delete()
-        val call = client.newCall(Request.Builder().url(manifest.apkUrl).build())
+        val apkUri = validateHttpsUri(manifest.apkUrl, "APK 地址")
+        val activeCall = java.util.concurrent.atomic.AtomicReference<okhttp3.Call?>(null)
         val cancellationWatcher = launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 awaitCancellation()
             } finally {
-                call.cancel()
+                activeCall.getAndSet(null)?.cancel()
             }
         }
         try {
             withContext(Dispatchers.IO) {
-                call.execute().use { response ->
+                val request = Request.Builder().url(apkUri.toString()).build()
+                val finalResponse = executeFollowingUpdateRedirects(client, request) { call -> activeCall.set(call) }
+                finalResponse.use { response ->
                     if (!response.isSuccessful) throw UpdateFailure("下载更新失败（${response.code}）")
-                    if (response.request.url.host != validateHttpsUri(manifest.apkUrl, "APK 地址").host) {
-                        throw UpdateFailure("APK 下载发生了跨域跳转")
-                    }
                     val responseLength = response.body.contentLength()
                     if (responseLength >= 0 && responseLength != manifest.apkSize) {
                         throw UpdateFailure("更新文件大小不一致")

@@ -26,8 +26,12 @@ internal class UpdateCoordinator(
     private val application: Application,
     private val scope: CoroutineScope,
     private val preferences: UpdatePreferences = UpdatePreferences(application),
-    private val client: UpdateManifestSource? = BuildConfig.UPDATE_MANIFEST_URL.takeIf { BuildConfig.SELF_UPDATE_ENABLED && it.isNotBlank() }
-        ?.let(::UpdateClient),
+    private val client: UpdateManifestSource? = when {
+        !BuildConfig.SELF_UPDATE_ENABLED -> null
+        BuildConfig.UPDATE_GITHUB_RELEASES_API.isNotBlank() ->
+            GitHubReleaseUpdateSource(BuildConfig.UPDATE_GITHUB_RELEASES_API, BuildConfig.VERSION_NAME)
+        else -> BuildConfig.UPDATE_MANIFEST_URL.takeIf { it.isNotBlank() }?.let(::UpdateClient)
+    },
     private val downloader: UpdateApkDownloader = UpdateDownloader(application),
     private val verifier: UpdateApkVerifier = ApkVerifier(application),
     private val installer: UpdateApkInstaller = UpdateInstaller(application),
@@ -42,6 +46,7 @@ internal class UpdateCoordinator(
 
     private var visible = false
     private var startupTriggered = false
+    private var lastCheckStartedAt: Long? = null
     private var automaticPromptAllowed = true
     private var pendingAutomaticManifest: UpdateManifest? = null
     private var nextAutomaticCheckAt: Long? = null
@@ -57,14 +62,23 @@ internal class UpdateCoordinator(
         downloader.cleanAll()
     }
 
+    /**
+     * 启动时检查一次；之后每次回到前台，只要距上次检查超过
+     * [FOREGROUND_CHECK_INTERVAL_MS] 也再检查一次（电视端应用常驻后台，
+     * 只靠 12 小时定时器会让「重新打开应用」迟迟看不到新版本）。
+     */
     fun onForeground() {
         visible = true
         if (!enabled) return
-        if (!startupTriggered) {
-            startupTriggered = true
-            check(UpdateCheckSource.Automatic)
-        } else {
-            scheduleTimer()
+        val sinceLastCheck = lastCheckStartedAt?.let { clock() - it }
+        when {
+            !startupTriggered -> {
+                startupTriggered = true
+                check(UpdateCheckSource.Automatic)
+            }
+            sinceLastCheck == null || sinceLastCheck >= FOREGROUND_CHECK_INTERVAL_MS ->
+                check(UpdateCheckSource.Automatic)
+            else -> scheduleTimer()
         }
     }
 
@@ -114,6 +128,7 @@ internal class UpdateCoordinator(
             return
         }
         if (downloadJob?.isActive == true) return
+        lastCheckStartedAt = clock()
         checkJob = scope.launch {
             mutableState.value = UpdateUiState.Checking(source)
             var succeeded = false
@@ -344,6 +359,8 @@ internal class UpdateCoordinator(
     private companion object {
         const val AUTO_CHECK_INTERVAL_MS = 12L * 60L * 60L * 1_000L
         const val AUTO_RETRY_INTERVAL_MS = 30L * 60L * 1_000L
+        /** 回到前台时距上次检查不足该间隔则不重复请求（GitHub API 未认证只有 60 次/小时）。 */
+        const val FOREGROUND_CHECK_INTERVAL_MS = 30L * 60L * 1_000L
     }
 
     private enum class SystemHandoff { InstallPermission, Installer }
